@@ -33,6 +33,11 @@ echo "==> Deploying RoomMind to ${SSH_USER}@${HA_IP}:${SSH_PORT}"
 
 # 1. Build frontend
 echo "--- Building frontend ---"
+if ! command -v npm >/dev/null 2>&1; then
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  # shellcheck source=/dev/null
+  [[ -s "${NVM_DIR}/nvm.sh" ]] && . "${NVM_DIR}/nvm.sh"
+fi
 (cd "${SCRIPT_DIR}/frontend" && npm run build --silent)
 echo "    OK"
 
