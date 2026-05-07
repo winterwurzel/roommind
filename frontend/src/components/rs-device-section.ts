@@ -6,6 +6,10 @@ import { localize } from "../utils/localize";
 import { getSelectValue, openEntityInfo } from "../utils/events";
 import { tempUnit } from "../utils/temperature";
 import { resolveHeatingSystemType } from "../utils/device-utils";
+import { masterDetailStyles } from "../styles/master-detail-styles";
+import { inputStyles } from "../styles/input-styles";
+import "./shared/rs-master-detail";
+import "./shared/rs-info-icon";
 
 @customElement("rs-device-section")
 export class RsDeviceSection extends LitElement {
@@ -22,6 +26,7 @@ export class RsDeviceSection extends LitElement {
   @state() private _selectedThermostats: Set<string> = new Set();
   @state() private _selectedCoolingDevices: Set<string> = new Set();
   @state() private _heatingSystemType = "";
+  @state() private _selectedForEdit = "";
 
   protected willUpdate(changed: PropertyValues): void {
     if (changed.has("devices")) {
@@ -32,279 +37,289 @@ export class RsDeviceSection extends LitElement {
         this.devices.filter((d) => d.type === "ac").map((d) => d.entity_id),
       );
       this._heatingSystemType = resolveHeatingSystemType(this.devices);
+
+      // Keep _selectedForEdit valid: clear if device was removed,
+      // auto-select first device when nothing is selected.
+      const inRoom = new Set(this.devices.map((d) => d.entity_id));
+      if (this._selectedForEdit && !inRoom.has(this._selectedForEdit)) {
+        this._selectedForEdit = "";
+      }
+      if (!this._selectedForEdit && this.devices.length > 0) {
+        this._selectedForEdit = this.devices[0].entity_id;
+      }
     }
   }
 
-  static styles = css`
-    :host {
-      display: block;
-    }
+  static styles = [
+    masterDetailStyles,
+    inputStyles,
+    css`
+      :host {
+        display: block;
+      }
 
-    .section-subtitle {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--secondary-text-color);
-      margin: 12px 0 8px 0;
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-    }
+      .section-subtitle {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+        margin: 12px 0 8px 0;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
 
-    .section-subtitle:first-child {
-      margin-top: 0;
-    }
+      .section-subtitle:first-child {
+        margin-top: 0;
+      }
 
-    .device-group {
-      padding: 4px 0;
-    }
+      .device-group {
+        padding: 4px 0;
+      }
 
-    .device-group + .device-group {
-      margin-top: 8px;
-      padding-top: 12px;
-      border-top: 1px solid var(--divider-color, #eee);
-    }
+      .device-group + .device-group {
+        margin-top: 8px;
+        padding-top: 12px;
+        border-top: 1px solid var(--divider-color, #eee);
+      }
 
-    .device-list-scroll {
-      max-height: 168px;
-      overflow-y: auto;
-      overflow-x: hidden;
-      scrollbar-width: thin;
-    }
+      .device-list-scroll {
+        max-height: 168px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-width: thin;
+      }
 
-    /* Device rows */
-    .device-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 8px 14px;
-      font-size: 14px;
-      color: var(--primary-text-color);
-      border-radius: 10px;
-      margin-bottom: 2px;
-      transition: background 0.15s;
-    }
+      /* Device rows */
+      .device-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 14px;
+        font-size: 14px;
+        color: var(--primary-text-color);
+        border-radius: 10px;
+        margin-bottom: 2px;
+        transition: background 0.15s;
+      }
 
-    .device-row:last-child {
-      margin-bottom: 0;
-    }
+      .device-row:last-child {
+        margin-bottom: 0;
+      }
 
-    .device-row:hover {
-      background: rgba(0, 0, 0, 0.02);
-    }
+      .device-row:hover {
+        background: rgba(0, 0, 0, 0.02);
+      }
 
-    .device-row.selected {
-      background: rgba(3, 169, 244, 0.035);
-    }
+      .device-row.selected {
+        background: rgba(3, 169, 244, 0.035);
+      }
 
-    .device-row ha-checkbox,
-    .device-row ha-radio {
-      flex-shrink: 0;
-    }
+      .device-row ha-checkbox,
+      .device-row ha-radio {
+        flex-shrink: 0;
+      }
 
-    .device-info {
-      flex: 1;
-      min-width: 0;
-    }
+      .device-info {
+        flex: 1;
+        min-width: 0;
+      }
 
-    .device-name-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+      .device-name-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
 
-    .device-name {
-      font-size: 14px;
-      font-weight: 450;
-      color: var(--primary-text-color);
-    }
+      .device-name {
+        font-size: 14px;
+        font-weight: 450;
+        color: var(--primary-text-color);
+      }
 
-    .device-value {
-      margin-left: auto;
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--primary-text-color);
-      flex-shrink: 0;
-    }
+      .device-value {
+        margin-left: auto;
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--primary-text-color);
+        flex-shrink: 0;
+      }
 
-    .device-entity {
-      font-family: var(--code-font-family, monospace);
-      font-size: 11px;
-      color: var(--secondary-text-color);
-      margin-top: 2px;
-      opacity: 0.7;
-    }
+      .device-entity {
+        font-family: var(--code-font-family, monospace);
+        font-size: 11px;
+        color: var(--secondary-text-color);
+        margin-top: 2px;
+        opacity: 0.7;
+      }
 
-    .external-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 10px;
-      font-weight: 500;
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.1);
-      padding: 2px 8px;
-      border-radius: 10px;
-      letter-spacing: 0.3px;
-      text-transform: uppercase;
-      flex-shrink: 0;
-    }
+      .external-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--warning-color, #ff9800);
+        background: rgba(255, 152, 0, 0.1);
+        padding: 2px 8px;
+        border-radius: 10px;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+        flex-shrink: 0;
+      }
 
-    .device-type-select {
-      flex-shrink: 0;
-      --ha-select-min-width: 90px;
-    }
+      .device-type-select {
+        flex-shrink: 0;
+        --ha-select-min-width: 90px;
+      }
 
-    .no-devices {
-      color: var(--secondary-text-color);
-      font-size: 13px;
-      font-style: italic;
-      padding: 12px 14px;
-    }
+      .no-devices {
+        color: var(--secondary-text-color);
+        font-size: 13px;
+        font-style: italic;
+        padding: 12px 14px;
+      }
 
-    .entity-picker-wrap {
-      margin-top: 12px;
-      padding-top: 12px;
-      border-top: 1px solid var(--divider-color, #eee);
-    }
+      .entity-picker-wrap {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--divider-color, #eee);
+      }
 
-    .subtitle-row {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
+      .subtitle-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
 
-    .info-icon {
-      --mdc-icon-size: 16px;
-      color: var(--secondary-text-color);
-      cursor: pointer;
-      opacity: 0.6;
-    }
-    .info-icon:hover,
-    .info-icon.info-active {
-      opacity: 1;
-      color: var(--primary-color);
-    }
+      .info-icon {
+        --mdc-icon-size: 16px;
+        color: var(--secondary-text-color);
+        cursor: pointer;
+        opacity: 0.6;
+      }
+      .info-icon:hover,
+      .info-icon.info-active {
+        opacity: 1;
+        color: var(--primary-color);
+      }
 
-    .system-type-info {
-      font-size: 12px;
-      line-height: 1.5;
-      color: var(--secondary-text-color);
-      padding: 8px 14px 4px;
-    }
+      .system-type-info {
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--secondary-text-color);
+        padding: 8px 14px 4px;
+      }
 
-    .boost-hint {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      margin-top: 8px;
-      padding: 8px 12px;
-      background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
-      border-radius: 8px;
-      font-size: 13px;
-      color: var(--primary-text-color);
-      line-height: 1.4;
-      --mdc-icon-size: 18px;
-    }
-    .boost-hint ha-icon {
-      color: var(--primary-color);
-      flex-shrink: 0;
-      margin-top: 1px;
-    }
+      .boost-hint {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--primary-text-color);
+        line-height: 1.4;
+        --mdc-icon-size: 18px;
+      }
+      .boost-hint ha-icon {
+        color: var(--primary-color);
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
 
-    .idle-action-row {
-      display: flex;
-      gap: 12px;
-      padding: 4px 14px 4px 42px;
-    }
+      .idle-action-row {
+        display: flex;
+        gap: 12px;
+        padding: 4px 14px 4px 42px;
+      }
 
-    .idle-action-row ha-select {
-      flex: 1;
-      min-width: 0;
-    }
+      .idle-action-row ha-select {
+        flex: 1;
+        min-width: 0;
+      }
 
-    .setpoint-mode-row {
-      display: flex;
-      gap: 12px;
-      padding: 4px 14px 4px 42px;
-    }
+      .setpoint-mode-row {
+        display: flex;
+        gap: 12px;
+        padding: 4px 14px 4px 42px;
+      }
 
-    .setpoint-mode-row ha-select {
-      flex: 1;
-      min-width: 0;
-    }
+      .setpoint-mode-row ha-select {
+        flex: 1;
+        min-width: 0;
+      }
 
-    .setpoint-mode-hint {
-      font-size: 12px;
-      color: var(--secondary-text-color);
-      padding: 2px 14px 4px 42px;
-    }
+      .setpoint-mode-hint {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        padding: 2px 14px 4px 42px;
+      }
 
-    .valve-exclude-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 2px 14px 2px 42px;
-      font-size: 12px;
-      color: var(--secondary-text-color);
-    }
+      .valve-exclude-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 14px 2px 42px;
+        font-size: 12px;
+        color: var(--secondary-text-color);
+      }
 
-    .valve-exclude-row ha-icon {
-      --mdc-icon-size: 14px;
-      color: var(--secondary-text-color);
-    }
+      .valve-exclude-row ha-icon {
+        --mdc-icon-size: 14px;
+        color: var(--secondary-text-color);
+      }
 
-    .valve-exclude-row ha-checkbox {
-      --mdc-checkbox-unchecked-color: var(--secondary-text-color);
-      margin: -8px -4px -8px -8px;
-    }
+      .valve-exclude-row ha-checkbox {
+        --mdc-checkbox-unchecked-color: var(--secondary-text-color);
+        margin: -8px -4px -8px -8px;
+      }
 
-    .valve-exclude-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      font-size: 10px;
-      font-weight: 500;
-      color: var(--secondary-text-color);
-      background: var(--secondary-background-color);
-      padding: 2px 6px;
-      border-radius: 8px;
-      --mdc-icon-size: 12px;
-    }
+      .valve-exclude-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+        background: var(--secondary-background-color);
+        padding: 2px 6px;
+        border-radius: 8px;
+        --mdc-icon-size: 12px;
+      }
 
-    ha-entity-picker {
-      width: 100%;
-    }
+      /* View mode styles */
+      .view-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        font-size: 14px;
+        color: var(--primary-text-color);
+      }
 
-    /* View mode styles */
-    .view-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 14px;
-      font-size: 14px;
-      color: var(--primary-text-color);
-    }
+      .view-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
 
-    .view-name {
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+      .entity-link {
+        cursor: pointer;
+      }
 
-    .entity-link {
-      cursor: pointer;
-    }
+      .entity-link:hover {
+        text-decoration: underline;
+      }
 
-    .entity-link:hover {
-      text-decoration: underline;
-    }
-
-    .view-value {
-      font-weight: 500;
-      flex-shrink: 0;
-    }
-  `;
+      .view-value {
+        font-weight: 500;
+        flex-shrink: 0;
+      }
+    `,
+  ];
 
   render() {
     if (!this.editing) {
@@ -415,8 +430,6 @@ export class RsDeviceSection extends LitElement {
   }
 
   private _renderEditMode() {
-    // Fetch all area entities once, then filter by category
-    // Exclude RoomMind's own entities to prevent self-assignment (#86)
     const allAreaEntities = getEntitiesForArea(
       this.area.area_id,
       this.hass?.entities,
@@ -427,41 +440,53 @@ export class RsDeviceSection extends LitElement {
     });
 
     const areaClimateEntities = allAreaEntities.filter((e) => e.entity_id.startsWith("climate."));
-
-    // Find selected entities not in this area (manually added)
     const areaClimateIds = new Set(areaClimateEntities.map((e) => e.entity_id));
     const allSelectedClimate = new Set(this.devices.map((d) => d.entity_id));
     const externalClimateIds = [...allSelectedClimate].filter((id) => !areaClimateIds.has(id));
 
-    return html`
-      <div class="device-group">
-        <div class="section-subtitle">
-          ${localize("devices.climate_entities", this.hass.language)}
-        </div>
-        <div class="device-list-scroll">
-          ${areaClimateEntities.length > 0
-            ? areaClimateEntities.map((entity) => this._renderClimateRow(entity.entity_id, false))
-            : html`<div class="no-devices">
-                ${localize("devices.no_climate", this.hass.language)}
-              </div>`}
-          ${externalClimateIds.map((id) => this._renderClimateRow(id, true))}
-        </div>
-      </div>
+    const inRoom = (id: string) => allSelectedClimate.has(id);
+    const detailId = this._selectedForEdit;
 
-      <div class="entity-picker-wrap">
-        <ha-entity-picker
-          .hass=${this.hass}
-          .includeDomains=${["climate"]}
-          .entityFilter=${this._entityFilter}
-          .value=${""}
-          label=${localize("devices.add_entity", this.hass.language)}
-          @value-changed=${this._onEntityPicked}
-        ></ha-entity-picker>
-      </div>
+    return html`
+      <rs-master-detail>
+        <div slot="master" class="master">
+          <div class="section-subtitle">
+            ${localize("devices.climate_entities", this.hass.language)}
+          </div>
+          <div class="master-list">
+            ${areaClimateEntities.length > 0
+              ? areaClimateEntities.map((e) => this._renderMasterRow(e.entity_id, false))
+              : html`<div class="no-devices">
+                  ${localize("devices.no_climate", this.hass.language)}
+                </div>`}
+            ${externalClimateIds.map((id) => this._renderMasterRow(id, true))}
+          </div>
+          <div class="entity-picker-wrap">
+            <ha-entity-picker
+              .hass=${this.hass}
+              .includeDomains=${["climate"]}
+              .entityFilter=${this._entityFilter}
+              .value=${""}
+              label=${localize("devices.add_entity", this.hass.language)}
+              @value-changed=${this._onEntityPicked}
+            ></ha-entity-picker>
+          </div>
+        </div>
+
+        <div slot="detail" class="detail-panel">
+          ${detailId && inRoom(detailId)
+            ? this._renderDeviceDetail(detailId)
+            : html`<div class="empty-detail">
+                <ha-icon icon="mdi:gesture-tap"></ha-icon>
+                <span>${localize("devices.select_to_configure", this.hass.language)}</span>
+              </div>`}
+        </div>
+      </rs-master-detail>
 
       ${this._selectedThermostats.size > 0
         ? html`
-            <div class="device-group">
+            <div class="block-divider"></div>
+            <div class="block">
               <div class="subtitle-row">
                 <div class="section-subtitle">
                   ${localize("devices.heating_system_type", this.hass.language)}
@@ -531,219 +556,226 @@ export class RsDeviceSection extends LitElement {
     `;
   }
 
-  private _renderClimateRow(entityId: string, external: boolean) {
+  private _renderMasterRow(entityId: string, external: boolean) {
     const isThermostat = this._selectedThermostats.has(entityId);
     const isAc = this._selectedCoolingDevices.has(entityId);
-    const isSelected = isThermostat || isAc;
+    const isInRoom = isThermostat || isAc;
+    const isFocused = this._selectedForEdit === entityId;
     const entityState = this.hass.states[entityId];
     const friendlyName = (entityState?.attributes?.friendly_name as string) || entityId;
-    const currentState = entityState?.state;
-    const currentTemp = entityState?.attributes?.current_temperature as number | undefined;
-    const isExcluded = this.valveProtectionExclude.has(entityId);
+    const device = this.devices.find((d) => d.entity_id === entityId);
+    const typeLabel = isThermostat
+      ? localize("devices.type_thermostat", this.hass.language)
+      : isAc
+        ? localize("devices.type_ac", this.hass.language)
+        : "";
 
     return html`
-      <div class="device-row ${isSelected ? "selected" : ""}">
+      <div
+        class="master-row ${isFocused ? "focused" : ""} ${isInRoom ? "in-room" : ""}"
+        @click=${() => this._onSelectForEdit(entityId)}
+      >
         <ha-checkbox
-          .checked=${isSelected}
+          .checked=${isInRoom}
+          @click=${(e: Event) => e.stopPropagation()}
           @change=${(e: Event) => {
             const target = e.target as HTMLElement & { checked: boolean };
             this._onClimateToggle(entityId, target.checked);
+            if (target.checked) this._selectedForEdit = entityId;
           }}
         ></ha-checkbox>
-        <div class="device-info">
-          <div class="device-name-row">
-            <span class="device-name">${friendlyName}</span>
+        <div class="master-info">
+          <div class="master-name-row">
+            <span class="master-name">${friendlyName}</span>
             ${external
               ? html`<span class="external-badge"
                   >${localize("devices.other_area", this.hass.language)}</span
                 >`
               : nothing}
           </div>
-          <div class="device-entity">${entityId}</div>
+          <div class="master-meta">
+            ${typeLabel ? html`<span class="type-pill">${typeLabel}</span>` : nothing}
+            ${device?.idle_action && device.idle_action !== "off"
+              ? html`<span class="meta-pill"
+                  >${localize(
+                    `devices.idle_action_${device.idle_action}`,
+                    this.hass.language,
+                  )}</span
+                >`
+              : nothing}
+            ${device?.setpoint_mode === "direct" && this.selectedTempSensor
+              ? html`<span class="meta-pill"
+                  >${localize("devices.setpoint_mode_direct", this.hass.language)}</span
+                >`
+              : nothing}
+          </div>
         </div>
-        ${currentTemp != null
-          ? html`<span class="device-value">${currentTemp.toFixed(1)}${tempUnit(this.hass)}</span>`
-          : currentState && currentState !== "unavailable"
-            ? html`<span class="device-value" style="font-size:12px; opacity:0.6"
-                >${currentState}</span
-              >`
-            : nothing}
-        ${isSelected
-          ? html`
-              <ha-select
-                class="device-type-select"
-                outlined
-                .value=${this._getDeviceDisplayType(entityId)}
-                .options=${[
-                  {
-                    value: "thermostat",
-                    label: localize("devices.type_thermostat", this.hass.language),
-                  },
-                  { value: "ac", label: localize("devices.type_ac", this.hass.language) },
-                ]}
-                @selected=${(e: Event) => {
-                  this._onDeviceTypeChange(entityId, getSelectValue(e) as "thermostat" | "ac");
-                }}
-                @closed=${(e: Event) => e.stopPropagation()}
-                fixedMenuPosition
-              >
-                <ha-list-item value="thermostat"
-                  >${localize("devices.type_thermostat", this.hass.language)}</ha-list-item
-                >
-                <ha-list-item value="ac"
-                  >${localize("devices.type_ac", this.hass.language)}</ha-list-item
-                >
-              </ha-select>
-            `
-          : nothing}
       </div>
-      ${(() => {
-        const hvacModes = (entityState?.attributes?.hvac_modes ?? []) as string[];
-        const supportsFanOnly = hvacModes.includes("fan_only");
-        const device = this.devices.find((d) => d.entity_id === entityId);
-        if (!isSelected) return nothing;
-        if (device?.type === "ac") {
-          return html`
-            <div class="idle-action-row">
+    `;
+  }
+
+  private _onSelectForEdit(entityId: string) {
+    this._selectedForEdit = entityId;
+  }
+
+  private _renderDeviceDetail(entityId: string) {
+    const device = this.devices.find((d) => d.entity_id === entityId);
+    if (!device) return nothing;
+
+    const isThermostat = device.type === "trv";
+    const isAc = device.type === "ac";
+    const entityState = this.hass.states[entityId];
+    const friendlyName = (entityState?.attributes?.friendly_name as string) || entityId;
+    const hvacModes = (entityState?.attributes?.hvac_modes ?? []) as string[];
+    const supportsFanOnly = hvacModes.includes("fan_only");
+    const isExcluded = this.valveProtectionExclude.has(entityId);
+    const lang = this.hass.language;
+
+    return html`
+      <div class="detail-head">
+        <div class="detail-title">${friendlyName}</div>
+        <div class="detail-entity-id">${entityId}</div>
+      </div>
+
+      <div class="detail-field">
+        <ha-select
+          .label=${localize("devices.type_label", lang) || "Type"}
+          .value=${this._getDeviceDisplayType(entityId)}
+          .options=${[
+            { value: "thermostat", label: localize("devices.type_thermostat", lang) },
+            { value: "ac", label: localize("devices.type_ac", lang) },
+          ]}
+          @selected=${(e: Event) =>
+            this._onDeviceTypeChange(entityId, getSelectValue(e) as "thermostat" | "ac")}
+          @closed=${(e: Event) => e.stopPropagation()}
+          fixedMenuPosition
+        >
+          <ha-list-item value="thermostat"
+            >${localize("devices.type_thermostat", lang)}</ha-list-item
+          >
+          <ha-list-item value="ac">${localize("devices.type_ac", lang)}</ha-list-item>
+        </ha-select>
+      </div>
+
+      ${isAc
+        ? html`
+            <div class="detail-field">
               <ha-select
-                .label=${localize("devices.idle_action", this.hass.language)}
+                .label=${localize("devices.idle_action", lang)}
                 .value=${device.idle_action ?? "off"}
                 .options=${[
-                  {
-                    value: "off",
-                    label: localize("devices.idle_action_off", this.hass.language),
-                  },
+                  { value: "off", label: localize("devices.idle_action_off", lang) },
                   ...(supportsFanOnly
                     ? [
                         {
                           value: "fan_only",
-                          label: localize("devices.idle_action_fan_only", this.hass.language),
+                          label: localize("devices.idle_action_fan_only", lang),
                         },
                       ]
                     : []),
-                  {
-                    value: "setback",
-                    label: localize("devices.idle_action_setback", this.hass.language),
-                  },
+                  { value: "setback", label: localize("devices.idle_action_setback", lang) },
                 ]}
                 @selected=${(e: Event) => this._onIdleActionChange(entityId, getSelectValue(e)!)}
                 @closed=${(e: Event) => e.stopPropagation()}
                 fixedMenuPosition
               >
                 <ha-list-item value="off"
-                  >${localize("devices.idle_action_off", this.hass.language)}</ha-list-item
+                  >${localize("devices.idle_action_off", lang)}</ha-list-item
                 >
                 ${supportsFanOnly
                   ? html`<ha-list-item value="fan_only"
-                      >${localize("devices.idle_action_fan_only", this.hass.language)}</ha-list-item
+                      >${localize("devices.idle_action_fan_only", lang)}</ha-list-item
                     >`
                   : nothing}
                 <ha-list-item value="setback"
-                  >${localize("devices.idle_action_setback", this.hass.language)}</ha-list-item
+                  >${localize("devices.idle_action_setback", lang)}</ha-list-item
                 >
               </ha-select>
-              ${device.idle_action === "fan_only"
-                ? html`
-                    <ha-select
-                      .label=${localize("devices.idle_fan_mode", this.hass.language)}
-                      .value=${device.idle_fan_mode ?? "low"}
-                      .options=${((entityState?.attributes?.fan_modes ?? []) as string[]).map(
-                        (fm) => ({ value: fm, label: fm }),
-                      )}
-                      @selected=${(e: Event) =>
-                        this._onIdleFanModeChange(entityId, getSelectValue(e)!)}
-                      @closed=${(e: Event) => e.stopPropagation()}
-                      fixedMenuPosition
-                    >
-                      ${((entityState?.attributes?.fan_modes ?? []) as string[]).map(
-                        (fm) => html`<ha-list-item value="${fm}">${fm}</ha-list-item>`,
-                      )}
-                    </ha-select>
-                  `
-                : nothing}
             </div>
-          `;
-        }
-        if (device?.type === "trv") {
-          return html`
-            <div class="idle-action-row">
+            ${device.idle_action === "fan_only"
+              ? html`<div class="detail-field">
+                  <ha-select
+                    .label=${localize("devices.idle_fan_mode", lang)}
+                    .value=${device.idle_fan_mode ?? "low"}
+                    .options=${((entityState?.attributes?.fan_modes ?? []) as string[]).map(
+                      (fm) => ({ value: fm, label: fm }),
+                    )}
+                    @selected=${(e: Event) =>
+                      this._onIdleFanModeChange(entityId, getSelectValue(e)!)}
+                    @closed=${(e: Event) => e.stopPropagation()}
+                    fixedMenuPosition
+                  >
+                    ${((entityState?.attributes?.fan_modes ?? []) as string[]).map(
+                      (fm) => html`<ha-list-item value="${fm}">${fm}</ha-list-item>`,
+                    )}
+                  </ha-select>
+                </div>`
+              : nothing}
+          `
+        : nothing}
+      ${isThermostat
+        ? html`
+            <div class="detail-field with-info">
               <ha-select
-                .label=${localize("devices.idle_action", this.hass.language)}
+                .label=${localize("devices.idle_action", lang)}
                 .value=${device.idle_action ?? "off"}
                 .options=${[
-                  {
-                    value: "off",
-                    label: localize("devices.idle_action_off", this.hass.language),
-                  },
-                  {
-                    value: "low",
-                    label: localize("devices.idle_action_low", this.hass.language),
-                  },
+                  { value: "off", label: localize("devices.idle_action_off", lang) },
+                  { value: "low", label: localize("devices.idle_action_low", lang) },
                 ]}
                 @selected=${(e: Event) => this._onIdleActionChange(entityId, getSelectValue(e)!)}
                 @closed=${(e: Event) => e.stopPropagation()}
                 fixedMenuPosition
               >
                 <ha-list-item value="off"
-                  >${localize("devices.idle_action_off", this.hass.language)}</ha-list-item
+                  >${localize("devices.idle_action_off", lang)}</ha-list-item
                 >
                 <ha-list-item value="low"
-                  >${localize("devices.idle_action_low", this.hass.language)}</ha-list-item
+                  >${localize("devices.idle_action_low", lang)}</ha-list-item
                 >
               </ha-select>
+              ${device.idle_action === "low"
+                ? html`<rs-info-icon
+                    .text=${localize("devices.idle_action_low_hint", lang)}
+                  ></rs-info-icon>`
+                : nothing}
             </div>
-            ${device.idle_action === "low"
-              ? html`
-                  <div class="setpoint-mode-hint">
-                    ${localize("devices.idle_action_low_hint", this.hass.language)}
-                  </div>
-                `
-              : nothing}
-          `;
-        }
-        return nothing;
-      })()}
-      ${(() => {
-        const device = this.devices.find((d) => d.entity_id === entityId);
-        if (!isSelected || !this.selectedTempSensor) return nothing;
-        return html`
-          <div class="setpoint-mode-row">
-            <ha-select
-              .label=${localize("devices.setpoint_mode", this.hass.language)}
-              .value=${device?.setpoint_mode ?? "proportional"}
-              .options=${[
-                {
-                  value: "proportional",
-                  label: localize("devices.setpoint_mode_proportional", this.hass.language),
-                },
-                {
-                  value: "direct",
-                  label: localize("devices.setpoint_mode_direct", this.hass.language),
-                },
-              ]}
-              @selected=${(e: Event) => this._onSetpointModeChange(entityId, getSelectValue(e)!)}
-              @closed=${(e: Event) => e.stopPropagation()}
-              fixedMenuPosition
-            >
-              <ha-list-item value="proportional"
-                >${localize("devices.setpoint_mode_proportional", this.hass.language)}</ha-list-item
+          `
+        : nothing}
+      ${this.selectedTempSensor
+        ? html`
+            <div class="detail-field with-info">
+              <ha-select
+                .label=${localize("devices.setpoint_mode", lang)}
+                .value=${device.setpoint_mode ?? "proportional"}
+                .options=${[
+                  {
+                    value: "proportional",
+                    label: localize("devices.setpoint_mode_proportional", lang),
+                  },
+                  {
+                    value: "direct",
+                    label: localize("devices.setpoint_mode_direct", lang),
+                  },
+                ]}
+                @selected=${(e: Event) => this._onSetpointModeChange(entityId, getSelectValue(e)!)}
+                @closed=${(e: Event) => e.stopPropagation()}
+                fixedMenuPosition
               >
-              <ha-list-item value="direct"
-                >${localize("devices.setpoint_mode_direct", this.hass.language)}</ha-list-item
-              >
-            </ha-select>
-          </div>
-          <div class="setpoint-mode-hint">
-            ${localize("devices.setpoint_mode_hint", this.hass.language)}
-          </div>
-        `;
-      })()}
+                <ha-list-item value="proportional"
+                  >${localize("devices.setpoint_mode_proportional", lang)}</ha-list-item
+                >
+                <ha-list-item value="direct"
+                  >${localize("devices.setpoint_mode_direct", lang)}</ha-list-item
+                >
+              </ha-select>
+              <rs-info-icon .text=${localize("devices.setpoint_mode_hint", lang)}></rs-info-icon>
+            </div>
+          `
+        : nothing}
       ${isThermostat && this.valveProtectionEnabled
         ? html`
-            <div
-              class="valve-exclude-row"
-              title=${localize("devices.valve_protection_exclude_hint", this.hass.language)}
-            >
+            <div class="detail-toggle-row">
               <ha-checkbox
                 .checked=${isExcluded}
                 @change=${(e: Event) => {
@@ -751,8 +783,13 @@ export class RsDeviceSection extends LitElement {
                   this._onValveProtectionExcludeToggle(entityId, target.checked);
                 }}
               ></ha-checkbox>
-              <ha-icon icon="mdi:shield-off-outline"></ha-icon>
-              ${localize("devices.valve_protection_excluded", this.hass.language)}
+              <div class="detail-toggle-label">
+                <ha-icon icon="mdi:shield-off-outline"></ha-icon>
+                ${localize("devices.valve_protection_excluded", lang)}
+                <rs-info-icon
+                  .text=${localize("devices.valve_protection_exclude_hint", lang)}
+                ></rs-info-icon>
+              </div>
             </div>
           `
         : nothing}

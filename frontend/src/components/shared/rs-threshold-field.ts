@@ -1,5 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
+import { inputStyles } from "../../styles/input-styles";
+import "./rs-info-icon";
 
 @customElement("rs-threshold-field")
 export class RsThresholdField extends LitElement {
@@ -11,36 +13,46 @@ export class RsThresholdField extends LitElement {
   @property({ type: Number }) public step: number | undefined;
   @property({ type: String }) public hint = "";
 
-  static styles = css`
-    :host {
-      display: block;
-    }
+  static styles = [
+    inputStyles,
+    css`
+      :host {
+        display: block;
+      }
 
-    ha-textfield {
-      display: block;
-      width: 100%;
-    }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
 
-    .hint {
-      font-size: 13px;
-      color: var(--secondary-text-color);
-      margin-top: 4px;
-    }
-  `;
+      ha-textfield {
+        display: block;
+        flex: 1;
+        min-width: 0;
+      }
+
+      rs-info-icon {
+        flex-shrink: 0;
+      }
+    `,
+  ];
 
   render() {
     return html`
-      <ha-textfield
-        .label=${this.label}
-        .suffix=${this.suffix}
-        .value=${this.value != null ? String(this.value) : ""}
-        .min=${this.min != null ? String(this.min) : ""}
-        .max=${this.max != null ? String(this.max) : ""}
-        .step=${this.step != null ? String(this.step) : ""}
-        type="number"
-        @input=${this._onInput}
-      ></ha-textfield>
-      ${this.hint ? html`<div class="hint">${this.hint}</div>` : nothing}
+      <div class="row">
+        <ha-textfield
+          .label=${this.label}
+          .suffix=${this.suffix}
+          .value=${this.value != null ? String(this.value) : ""}
+          .min=${this.min != null ? String(this.min) : ""}
+          .max=${this.max != null ? String(this.max) : ""}
+          .step=${this.step != null ? String(this.step) : ""}
+          type="number"
+          @input=${this._onInput}
+        ></ha-textfield>
+        ${this.hint ? html`<rs-info-icon .text=${this.hint}></rs-info-icon>` : nothing}
+      </div>
     `;
   }
 

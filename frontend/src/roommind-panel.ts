@@ -72,6 +72,14 @@ export class RoomMindPanel extends LitElement {
       color: var(--primary-text-color);
       background: var(--primary-background-color);
       min-height: 100vh;
+
+      /* Round the corners of all MDC-based inputs (ha-textfield, ha-select,
+         ha-entity-picker, ha-combo-box) to match the rest of the design.
+         The bottom corners are rounded via inputStyles in each component. */
+      --mdc-shape-small: 8px;
+      --mdc-shape-medium: 8px;
+      --md-filled-text-field-container-shape: 8px;
+      --md-outlined-text-field-container-shape: 8px;
     }
 
     .toolbar {

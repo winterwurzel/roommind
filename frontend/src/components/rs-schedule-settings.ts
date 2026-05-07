@@ -1,6 +1,5 @@
 import { html, css, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { ScheduleEntry, ClimateMode } from "../types";
 import { localize } from "../utils/localize";
 import {
@@ -12,6 +11,7 @@ import {
   tempRange,
 } from "../utils/temperature";
 import { RsScheduleBase } from "./shared/rs-schedule-base";
+import { inputStyles } from "../styles/input-styles";
 
 @customElement("rs-schedule-settings")
 export class RsScheduleSettings extends RsScheduleBase {
@@ -38,6 +38,7 @@ export class RsScheduleSettings extends RsScheduleBase {
 
   static styles = [
     RsScheduleBase.sharedStyles,
+    inputStyles,
     css`
       .fallback-hint {
         font-size: 11px;
@@ -120,45 +121,6 @@ export class RsScheduleSettings extends RsScheduleBase {
         .temp-grid-header {
           display: none;
         }
-      }
-
-      ha-expansion-panel {
-        margin-top: 8px;
-      }
-
-      .help-content {
-        padding: 0 12px 12px;
-        font-size: 12px;
-        color: var(--secondary-text-color);
-        line-height: 1.5;
-      }
-      .help-content p {
-        margin: 0 0 8px 0;
-      }
-      .help-content p:last-child {
-        margin-bottom: 0;
-      }
-
-      .yaml-block {
-        background: var(--primary-background-color, #f5f5f5);
-        border: 1px solid var(--divider-color, #e0e0e0);
-        border-radius: 6px;
-        padding: 8px 12px;
-        font-family: var(--code-font-family, monospace);
-        font-size: 12px;
-        line-height: 1.5;
-        white-space: pre;
-        overflow-x: auto;
-        color: var(--primary-text-color);
-      }
-      .yaml-comment {
-        color: var(--secondary-text-color);
-      }
-      .yaml-key {
-        color: #0550ae;
-      }
-      .yaml-value {
-        color: #0a3069;
       }
     `,
   ];
@@ -271,56 +233,6 @@ export class RsScheduleSettings extends RsScheduleBase {
         (value) => this._onSelectorEntityChange(value),
       )}
       ${this._renderTemperatureInputs(l)}
-
-      <ha-expansion-panel outlined header=${localize("schedule.help_header", l)}>
-        <div class="help-content">
-          <p><strong>${localize("schedule.help_temps_title", l)}</strong></p>
-          <p>${localize("schedule.help_temps", l)}</p>
-          <ol style="margin: 4px 0 0 0; padding-left: 20px; font-size: 12px; line-height: 1.8">
-            <li>${unsafeHTML(localize("schedule.help_temps_1", l))}</li>
-            <li>${unsafeHTML(localize("schedule.help_temps_2", l))}</li>
-            <li>${unsafeHTML(localize("schedule.help_temps_3", l))}</li>
-            <li>${unsafeHTML(localize("schedule.help_temps_4", l))}</li>
-          </ol>
-
-          <p style="margin-top: 12px">
-            <strong>${localize("schedule.help_block_title", l)}</strong>
-          </p>
-          <p>${unsafeHTML(localize("schedule.help_block", l))}</p>
-          <div class="yaml-block">
-            <span class="yaml-key">schedule</span>:
-            <span class="yaml-key">living_room_heating</span>: <span class="yaml-key">name</span>:
-            <span class="yaml-value">Living Room Heating</span>
-            <span class="yaml-key">monday</span>: - <span class="yaml-key">from</span>:
-            <span class="yaml-value">"06:00:00"</span> <span class="yaml-key">to</span>:
-            <span class="yaml-value">"08:00:00"</span> <span class="yaml-key">data</span>:
-            <span class="yaml-key">temperature</span>: <span class="yaml-value">23</span> -
-            <span class="yaml-key">from</span>: <span class="yaml-value">"17:00:00"</span>
-            <span class="yaml-key">to</span>: <span class="yaml-value">"22:00:00"</span>
-            <span class="yaml-key">data</span>: <span class="yaml-key">temperature</span>:
-            <span class="yaml-value">21.5</span>
-          </div>
-          <p style="margin-top: 8px">${unsafeHTML(localize("schedule.help_block_note", l))}</p>
-
-          <p style="margin-top: 12px">
-            <strong>${localize("schedule.help_split_title", l)}</strong>
-          </p>
-          <p>${unsafeHTML(localize("schedule.help_split", l))}</p>
-          <div class="yaml-block">
-            - <span class="yaml-key">from</span>: <span class="yaml-value">"06:00:00"</span>
-            <span class="yaml-key">to</span>: <span class="yaml-value">"08:00:00"</span>
-            <span class="yaml-key">data</span>: <span class="yaml-key">heat_temperature</span>:
-            <span class="yaml-value">21</span> <span class="yaml-key">cool_temperature</span>:
-            <span class="yaml-value">24</span>
-          </div>
-          <p style="margin-top: 8px">${unsafeHTML(localize("schedule.help_split_note", l))}</p>
-
-          <p style="margin-top: 12px">
-            <strong>${localize("schedule.help_multi_title", l)}</strong>
-          </p>
-          <p>${unsafeHTML(localize("schedule.help_multi", l))}</p>
-        </div>
-      </ha-expansion-panel>
     `;
   }
 

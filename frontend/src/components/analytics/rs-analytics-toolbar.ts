@@ -8,6 +8,7 @@ import { localize } from "../../utils/localize";
 import { getSelectValue } from "../../utils/events";
 import { buildCsvString, downloadString, buildExportFilename } from "../../utils/analytics-export";
 import { copyToClipboard } from "../../utils/clipboard";
+import { inputStyles } from "../../styles/input-styles";
 
 @customElement("rs-analytics-toolbar")
 export class RsAnalyticsToolbar extends LitElement {
@@ -311,201 +312,204 @@ export class RsAnalyticsToolbar extends LitElement {
     }
   }
 
-  static styles = css`
-    :host {
-      display: block;
-    }
+  static styles = [
+    inputStyles,
+    css`
+      :host {
+        display: block;
+      }
 
-    .selector-row {
-      margin-bottom: 16px;
-    }
+      .selector-row {
+        margin-bottom: 16px;
+      }
 
-    .selector-row ha-select {
-      width: 100%;
-    }
+      .selector-row ha-select {
+        width: 100%;
+      }
 
-    .range-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-      gap: 12px;
-    }
-
-    .range-controls {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      position: relative;
-    }
-
-    .range-bar {
-      display: inline-flex;
-      border-radius: 12px;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color);
-    }
-
-    .range-bar > :first-child {
-      border-radius: 12px 0 0 12px;
-    }
-
-    .range-bar > :last-child {
-      border-radius: 0 12px 12px 0;
-    }
-
-    .range-chip {
-      padding: 7px 14px;
-      border: none;
-      border-right: 1px solid var(--divider-color);
-      background: transparent;
-      color: var(--secondary-text-color);
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition:
-        background 0.15s ease,
-        color 0.15s ease;
-      font-family: inherit;
-      white-space: nowrap;
-    }
-
-    .range-chip:last-child {
-      border-right: none;
-    }
-
-    .range-chip:hover:not([active]) {
-      background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
-      color: var(--primary-text-color);
-    }
-
-    .range-chip[active] {
-      background: var(--primary-color);
-      color: var(--text-primary-color, #fff);
-    }
-
-    .picker-chip {
-      display: flex;
-      align-items: center;
-      padding: 0;
-      cursor: pointer;
-    }
-
-    .picker-chip ha-date-range-picker {
-      --mdc-icon-size: 18px;
-      --mdc-icon-button-size: 32px;
-    }
-
-    .picker-chip.picker-active {
-      background: var(--primary-color);
-      color: var(--text-primary-color, #fff);
-    }
-
-    .date-label {
-      font-size: 12px;
-      color: var(--secondary-text-color);
-      white-space: nowrap;
-    }
-
-    .date-label.custom-active {
-      color: var(--primary-color);
-    }
-
-    .action-buttons {
-      display: flex;
-      gap: 8px;
-    }
-
-    .export-split {
-      position: relative;
-      display: inline-flex;
-    }
-
-    .export-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 7px 14px;
-      border: 1px solid var(--divider-color);
-      border-radius: 12px;
-      background: var(--card-background-color);
-      color: var(--secondary-text-color);
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      font-family: inherit;
-      white-space: nowrap;
-      --mdc-icon-size: 14px;
-    }
-
-    .export-btn:hover {
-      color: var(--primary-text-color);
-      border-color: var(--primary-color);
-    }
-
-    .export-btn[disabled] {
-      opacity: 0.4;
-      cursor: default;
-    }
-
-    .arrow-icon {
-      --mdc-icon-size: 14px;
-      margin-left: 2px;
-      margin-right: -4px;
-    }
-
-    .export-dropdown {
-      position: absolute;
-      top: 100%;
-      right: 0;
-      margin-top: 4px;
-      min-width: 100%;
-      background: var(--card-background-color);
-      border: 1px solid var(--divider-color);
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-      z-index: 10;
-      overflow: hidden;
-    }
-
-    .export-dropdown button {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      width: 100%;
-      padding: 10px 14px;
-      border: none;
-      background: transparent;
-      color: var(--primary-text-color);
-      font-size: 12px;
-      font-family: inherit;
-      cursor: pointer;
-      white-space: nowrap;
-      --mdc-icon-size: 14px;
-    }
-
-    .export-dropdown button:hover {
-      background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
-    }
-
-    .export-dropdown button + button {
-      border-top: 1px solid var(--divider-color);
-    }
-
-    @media (max-width: 600px) {
       .range-row {
-        flex-wrap: wrap;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+        gap: 12px;
       }
+
       .range-controls {
-        flex-wrap: wrap;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        position: relative;
       }
+
+      .range-bar {
+        display: inline-flex;
+        border-radius: 12px;
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+      }
+
+      .range-bar > :first-child {
+        border-radius: 12px 0 0 12px;
+      }
+
+      .range-bar > :last-child {
+        border-radius: 0 12px 12px 0;
+      }
+
       .range-chip {
-        padding: 6px 10px;
-        font-size: 11px;
+        padding: 7px 14px;
+        border: none;
+        border-right: 1px solid var(--divider-color);
+        background: transparent;
+        color: var(--secondary-text-color);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease;
+        font-family: inherit;
+        white-space: nowrap;
       }
-    }
-  `;
+
+      .range-chip:last-child {
+        border-right: none;
+      }
+
+      .range-chip:hover:not([active]) {
+        background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
+        color: var(--primary-text-color);
+      }
+
+      .range-chip[active] {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+      }
+
+      .picker-chip {
+        display: flex;
+        align-items: center;
+        padding: 0;
+        cursor: pointer;
+      }
+
+      .picker-chip ha-date-range-picker {
+        --mdc-icon-size: 18px;
+        --mdc-icon-button-size: 32px;
+      }
+
+      .picker-chip.picker-active {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+      }
+
+      .date-label {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+      }
+
+      .date-label.custom-active {
+        color: var(--primary-color);
+      }
+
+      .action-buttons {
+        display: flex;
+        gap: 8px;
+      }
+
+      .export-split {
+        position: relative;
+        display: inline-flex;
+      }
+
+      .export-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 7px 14px;
+        border: 1px solid var(--divider-color);
+        border-radius: 12px;
+        background: var(--card-background-color);
+        color: var(--secondary-text-color);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        font-family: inherit;
+        white-space: nowrap;
+        --mdc-icon-size: 14px;
+      }
+
+      .export-btn:hover {
+        color: var(--primary-text-color);
+        border-color: var(--primary-color);
+      }
+
+      .export-btn[disabled] {
+        opacity: 0.4;
+        cursor: default;
+      }
+
+      .arrow-icon {
+        --mdc-icon-size: 14px;
+        margin-left: 2px;
+        margin-right: -4px;
+      }
+
+      .export-dropdown {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 4px;
+        min-width: 100%;
+        background: var(--card-background-color);
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        z-index: 10;
+        overflow: hidden;
+      }
+
+      .export-dropdown button {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 10px 14px;
+        border: none;
+        background: transparent;
+        color: var(--primary-text-color);
+        font-size: 12px;
+        font-family: inherit;
+        cursor: pointer;
+        white-space: nowrap;
+        --mdc-icon-size: 14px;
+      }
+
+      .export-dropdown button:hover {
+        background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
+      }
+
+      .export-dropdown button + button {
+        border-top: 1px solid var(--divider-color);
+      }
+
+      @media (max-width: 600px) {
+        .range-row {
+          flex-wrap: wrap;
+        }
+        .range-controls {
+          flex-wrap: wrap;
+        }
+        .range-chip {
+          padding: 6px 10px;
+          font-size: 11px;
+        }
+      }
+    `,
+  ];
 }
 
 declare global {

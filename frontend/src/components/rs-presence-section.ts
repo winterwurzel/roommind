@@ -2,7 +2,6 @@ import { LitElement, html, css, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../types";
 import { localize } from "../utils/localize";
-import "./rs-section-card";
 import "./shared/rs-toggle-row";
 
 @customElement("rs-presence-section")
@@ -20,38 +19,59 @@ export class RsPresenceSection extends LitElement {
       display: block;
     }
 
-    .presence-chips {
-      display: flex;
-      flex-wrap: wrap;
+    .presence-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: 8px;
+      margin-top: 12px;
     }
 
-    .presence-chip {
-      display: inline-flex;
+    .presence-card {
+      display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 8px;
+      padding: 8px 12px 8px 6px;
+      border: 1px solid var(--divider-color);
+      border-radius: 10px;
+      background: var(--card-background-color);
       cursor: pointer;
-      border: 1px solid var(--divider-color, #e0e0e0);
-      border-radius: 16px;
-      padding: 4px 12px;
-      font-size: 13px;
-      font-family: inherit;
-      background: transparent;
-      color: var(--secondary-text-color);
       transition:
-        background 0.15s,
-        border-color 0.15s,
-        color 0.15s;
+        border-color 0.15s ease,
+        background 0.15s ease;
+      user-select: none;
     }
 
-    .presence-chip:hover {
-      background: rgba(0, 0, 0, 0.04);
+    .presence-card:hover {
+      background: rgba(255, 255, 255, 0.03);
     }
 
-    .presence-chip.active {
-      border-color: var(--primary-color);
+    .presence-card.active {
+      border-color: rgba(3, 169, 244, 0.4);
+      background: rgba(3, 169, 244, 0.08);
+    }
+
+    .presence-card ha-checkbox {
+      flex-shrink: 0;
+    }
+
+    .person-icon {
+      --mdc-icon-size: 18px;
+      color: var(--secondary-text-color);
+      flex-shrink: 0;
+    }
+
+    .presence-card.active .person-icon {
       color: var(--primary-color);
-      background: rgba(var(--rgb-primary-color, 33, 150, 243), 0.08);
+    }
+
+    .person-name {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 450;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .presence-list {
@@ -133,138 +153,99 @@ export class RsPresenceSection extends LitElement {
       color: var(--secondary-text-color);
       font-size: 12px;
     }
-
-    .help-content {
-      padding: 0 16px 16px;
-      font-size: 13px;
-      color: var(--secondary-text-color);
-      line-height: 1.5;
-    }
   `;
 
   render() {
     if (!this.presenceEnabled || this.presencePersons.length === 0) return nothing;
 
+    if (!this.editing) {
+      if (this.ignorePresence) {
+        return html`<span class="field-hint"
+          >${localize("presence.tile_ignored", this.language)}</span
+        >`;
+      }
+      return this._renderViewMode();
+    }
+
     return html`
-      <rs-section-card
-        icon="mdi:home-account"
-        .heading=${localize("room.section.presence", this.language)}
-        hasInfo
-        editable
-        .editing=${this.editing}
-        .doneLabel=${localize("schedule.done", this.language)}
-        @edit-click=${this._onEditClick}
-        @done-click=${this._onDoneClick}
-      >
-        <div slot="info">${localize("presence.ignore_hint", this.language)}</div>
-        <rs-toggle-row
-          .label=${localize("presence.ignore_toggle", this.language)}
-          .checked=${this.ignorePresence}
-          @toggle-changed=${this._onIgnoreToggle}
-        ></rs-toggle-row>
-        ${!this.ignorePresence ? html`<div class="section-divider"></div>` : nothing}
-        ${this.ignorePresence
-          ? nothing
-          : this.editing
-            ? this._renderEditMode()
-            : this._renderViewMode()}
-      </rs-section-card>
+      <rs-toggle-row
+        .label=${localize("presence.ignore_toggle", this.language)}
+        .checked=${this.ignorePresence}
+        @toggle-changed=${this._onIgnoreToggle}
+      ></rs-toggle-row>
+      ${!this.ignorePresence
+        ? html`<div class="section-divider"></div>
+            ${this._renderEditMode()}`
+        : nothing}
     `;
   }
 
   private _renderEditMode() {
     return html`
-      <div style="padding: 8px 16px 16px">
-        <div class="presence-chips">
-          ${this.presencePersons.map((pid) => {
-            const active = this.selectedPresencePersons.includes(pid);
-            const name =
-              this.hass.states[pid]?.attributes?.friendly_name ?? pid.split(".").slice(1).join(".");
-            return html`
-              <button
-                class="presence-chip ${active ? "active" : ""}"
-                @click=${() => this._onTogglePerson(pid, active)}
-              >
-                <ha-icon
-                  icon=${active ? "mdi:account-check" : "mdi:account-outline"}
-                  style="--mdc-icon-size: 16px"
-                ></ha-icon>
-                ${name}
-              </button>
-            `;
-          })}
-        </div>
-        <ha-expansion-panel
-          outlined
-          .header=${localize("presence.room_help_header", this.language)}
-          style="margin-top: 12px"
-        >
-          <div class="help-content">
-            <p>${localize("presence.room_help_body", this.language)}</p>
-          </div>
-        </ha-expansion-panel>
+      <div class="presence-grid">
+        ${this.presencePersons.map((pid) => {
+          const active = this.selectedPresencePersons.includes(pid);
+          const name =
+            this.hass.states[pid]?.attributes?.friendly_name ?? pid.split(".").slice(1).join(".");
+          return html`
+            <div
+              class="presence-card ${active ? "active" : ""}"
+              role="checkbox"
+              tabindex="0"
+              aria-checked=${active}
+              @click=${() => this._onTogglePerson(pid, active)}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  this._onTogglePerson(pid, active);
+                }
+              }}
+            >
+              <ha-checkbox
+                .checked=${active}
+                tabindex="-1"
+                @click=${(e: Event) => e.stopPropagation()}
+                @change=${() => this._onTogglePerson(pid, active)}
+              ></ha-checkbox>
+              <ha-icon class="person-icon" icon="mdi:account"></ha-icon>
+              <span class="person-name">${name}</span>
+            </div>
+          `;
+        })}
       </div>
     `;
   }
 
   private _renderViewMode() {
+    if (this.selectedPresencePersons.length === 0) {
+      return html`<span class="field-hint"
+        >${localize("presence.room_none_assigned", this.language)}</span
+      >`;
+    }
     return html`
-      <div style="padding: 8px 16px 16px">
-        ${this.selectedPresencePersons.length > 0
-          ? html`
-              <div class="presence-list">
-                ${this.selectedPresencePersons.map((pid) => {
-                  const name =
-                    this.hass.states[pid]?.attributes?.friendly_name ??
-                    pid.split(".").slice(1).join(".");
-                  const st = this.hass.states[pid]?.state;
-                  const isHome =
-                    pid.startsWith("person.") || pid.startsWith("device_tracker.")
-                      ? st === "home"
-                      : st === "on";
-                  return html`
-                    <div class="presence-row ${isHome ? "home" : "away"}">
-                      <span class="presence-dot"></span>
-                      <span class="presence-name">${name}</span>
-                      <span class="presence-state"
-                        >${isHome
-                          ? localize("presence.state_home", this.language)
-                          : localize("presence.state_away", this.language)}</span
-                      >
-                    </div>
-                  `;
-                })}
-              </div>
-            `
-          : html`
-              <span class="field-hint"
-                >${localize("presence.room_none_assigned", this.language)}</span
+      <div class="presence-list">
+        ${this.selectedPresencePersons.map((pid) => {
+          const name =
+            this.hass.states[pid]?.attributes?.friendly_name ?? pid.split(".").slice(1).join(".");
+          const st = this.hass.states[pid]?.state;
+          const isHome =
+            pid.startsWith("person.") || pid.startsWith("device_tracker.")
+              ? st === "home"
+              : st === "on";
+          return html`
+            <div class="presence-row ${isHome ? "home" : "away"}">
+              <span class="presence-dot"></span>
+              <span class="presence-name">${name}</span>
+              <span class="presence-state"
+                >${isHome
+                  ? localize("presence.state_home", this.language)
+                  : localize("presence.state_away", this.language)}</span
               >
-            `}
+            </div>
+          `;
+        })}
       </div>
     `;
-  }
-
-  private _onEditClick() {
-    this.editing = true;
-    this.dispatchEvent(
-      new CustomEvent("editing-changed", {
-        detail: { editing: true },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  private _onDoneClick() {
-    this.editing = false;
-    this.dispatchEvent(
-      new CustomEvent("editing-changed", {
-        detail: { editing: false },
-        bubbles: true,
-        composed: true,
-      }),
-    );
   }
 
   private _onIgnoreToggle(e: CustomEvent<boolean>) {

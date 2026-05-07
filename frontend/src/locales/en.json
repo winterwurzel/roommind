@@ -2,6 +2,7 @@
   "panel.title": "RoomMind",
   "panel.subtitle": "Climate management",
   "panel.tab.rooms": "Rooms",
+  "panel.edit": "Edit room",
   "panel.tab.settings": "Settings",
   "panel.loading": "Loading...",
   "panel.no_areas": "No areas configured in Home Assistant.",
@@ -172,6 +173,8 @@
   "devices.other_area": "Other area",
   "devices.type_thermostat": "Thermostat",
   "devices.type_ac": "Climate Device",
+  "devices.type_label": "Type",
+  "devices.select_to_configure": "Select a device to configure",
   "devices.heating_system_type": "Heating System Type",
   "devices.heating_system_type_info": "After heating stops, radiators and especially underfloor systems continue to release stored heat. RoomMind accounts for this residual heat to avoid overshooting and improve model accuracy. Underfloor rooms also get longer minimum run times.",
   "devices.system_type_none": "Standard (no residual heat)",
@@ -431,6 +434,9 @@
   "presence.room_none_assigned": "Global rule — eco when nobody is home",
   "presence.ignore_toggle": "Ignore presence",
   "presence.ignore_hint": "Controls how this room reacts to presence. You can assign specific persons below. The room switches to eco when none of the assigned persons are home. Use the toggle above to skip detection entirely and always follow the schedule.",
+  "presence.help_ignore_title": "What does \"Ignore presence\" do?",
+  "presence.help_ignore_body": "When enabled, this room skips presence detection entirely. It always follows its schedule and never switches to eco based on who is home. Useful for rooms that should maintain temperature regardless of presence, such as a server room, a pet room, or a guest room used by someone not tracked by Home Assistant.",
+  "presence.tile_ignored": "Presence detection is ignored. Room always follows its schedule.",
   "presence.away_action_label": "Action when nobody is home",
   "presence.away_action_eco": "Use eco temperature",
   "presence.away_action_off": "Turn off devices",
@@ -526,5 +532,6 @@
   "heat_source.outdoor_threshold_suffix": "°C",
   "heat_source.ac_min_outdoor": "Min. outdoor temp for AC heating",
   "heat_source.ac_min_outdoor_hint": "Disable AC heating entirely below this temperature to protect the heat pump hardware.",
-  "heat_source.ac_min_outdoor_suffix": "°C"
+  "heat_source.ac_min_outdoor_suffix": "°C",
+  "heat_source.summary_disabled": "Smart source selection is off"
 }

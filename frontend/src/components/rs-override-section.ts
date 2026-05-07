@@ -2,14 +2,8 @@ import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant, RoomConfig, ClimateMode, OverrideType } from "../types";
 import { localize } from "../utils/localize";
-import {
-  formatTemp,
-  tempUnit,
-  toDisplay,
-  toCelsius,
-  tempStep,
-  tempRange,
-} from "../utils/temperature";
+import { inputStyles } from "../styles/input-styles";
+import { tempUnit, toDisplay, toCelsius, tempStep, tempRange } from "../utils/temperature";
 
 @customElement("rs-override-section")
 export class RsOverrideSection extends LitElement {
@@ -32,148 +26,144 @@ export class RsOverrideSection extends LitElement {
   } | null = null;
   @state() private _optimisticClear = false;
 
-  static styles = css`
-    :host {
-      display: block;
-    }
+  static styles = [
+    inputStyles,
+    css`
+      :host {
+        display: block;
+      }
 
-    .override-divider {
-      border: none;
-      border-top: 1px solid var(--divider-color, #e0e0e0);
-      margin: 16px 0 12px;
-    }
+      .override-divider {
+        border: none;
+        border-top: 1px solid var(--divider-color, #e0e0e0);
+        margin: 16px 0 12px;
+      }
 
-    .override-label {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--secondary-text-color);
-      margin-bottom: 10px;
-    }
+      .override-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+        margin-bottom: 10px;
+      }
 
-    .override-presets {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
+      .override-presets {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
 
-    .override-preset {
-      cursor: pointer;
-      border: 1px solid var(--divider-color, #e0e0e0);
-      border-radius: 8px;
-      padding: 6px 12px;
-      font-size: 13px;
-      background: transparent;
-      color: var(--primary-text-color);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      transition:
-        background 0.15s,
-        border-color 0.15s;
-    }
+      .override-preset {
+        cursor: pointer;
+        border: 1px solid var(--divider-color, #e0e0e0);
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-size: 13px;
+        background: transparent;
+        color: var(--primary-text-color);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        transition:
+          background 0.15s,
+          border-color 0.15s;
+      }
 
-    .override-preset:hover {
-      background: rgba(0, 0, 0, 0.04);
-    }
+      .override-preset:hover {
+        background: rgba(0, 0, 0, 0.04);
+      }
 
-    .override-preset.pending {
-      border-color: var(--primary-color);
-      background: rgba(var(--rgb-primary-color, 33, 150, 243), 0.08);
-    }
+      .override-preset.pending {
+        border-color: var(--primary-color);
+        background: rgba(var(--rgb-primary-color, 33, 150, 243), 0.08);
+      }
 
-    .override-preset.active.boost {
-      border-color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.15);
-      color: var(--warning-color, #ff9800);
-    }
+      .override-preset.active.boost {
+        border-color: var(--warning-color, #ff9800);
+        background: rgba(255, 152, 0, 0.15);
+        color: var(--warning-color, #ff9800);
+      }
 
-    .override-preset.active.eco {
-      border-color: #4caf50;
-      background: rgba(76, 175, 80, 0.15);
-      color: #4caf50;
-    }
+      .override-preset.active.eco {
+        border-color: #4caf50;
+        background: rgba(76, 175, 80, 0.15);
+        color: #4caf50;
+      }
 
-    .override-preset.active.custom {
-      border-color: #2196f3;
-      background: rgba(33, 150, 243, 0.15);
-      color: #2196f3;
-    }
+      .override-preset.active.custom {
+        border-color: #2196f3;
+        background: rgba(33, 150, 243, 0.15);
+        color: #2196f3;
+      }
 
-    .override-preset:disabled {
-      opacity: 0.35;
-      cursor: default;
-    }
+      .override-preset:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
 
-    .override-preset:disabled:hover {
-      background: transparent;
-    }
+      .override-preset:disabled:hover {
+        background: transparent;
+      }
 
-    .override-preset ha-icon {
-      --mdc-icon-size: 16px;
-    }
+      .override-preset ha-icon {
+        --mdc-icon-size: 16px;
+      }
 
-    .override-duration {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 10px;
-      align-items: center;
-    }
+      .override-target {
+        display: block;
+        width: 160px;
+        margin-top: 12px;
+      }
 
-    .override-duration-label {
-      font-size: 12px;
-      color: var(--secondary-text-color);
-    }
+      .override-duration {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+        align-items: center;
+      }
 
-    .override-dur-chip {
-      cursor: pointer;
-      border: 1px solid var(--divider-color, #e0e0e0);
-      border-radius: 16px;
-      padding: 4px 12px;
-      font-size: 12px;
-      background: transparent;
-      color: var(--primary-text-color);
-      transition: background 0.15s;
-    }
+      .override-duration-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+      }
 
-    .override-dur-chip:hover {
-      background: rgba(0, 0, 0, 0.04);
-    }
+      .override-dur-chips {
+        display: flex;
+        gap: 6px;
+      }
 
-    .override-dur-chip:disabled {
-      opacity: 0.5;
-      pointer-events: none;
-    }
+      .override-dur-chip {
+        cursor: pointer;
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        padding: 6px 14px;
+        font-size: 13px;
+        font-weight: 500;
+        background: var(--card-background-color);
+        color: var(--primary-text-color);
+        transition:
+          border-color 0.15s ease,
+          background 0.15s ease;
+      }
 
-    .override-custom-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 8px;
-    }
+      .override-dur-chip:hover {
+        background: rgba(255, 255, 255, 0.04);
+        border-color: rgba(3, 169, 244, 0.4);
+      }
 
-    .override-custom-row input {
-      width: 56px;
-      padding: 4px 8px;
-      border: 1px solid var(--divider-color, #e0e0e0);
-      border-radius: 8px;
-      font-size: 13px;
-      text-align: center;
-      background: transparent;
-      color: var(--primary-text-color);
-    }
+      .override-dur-chip:disabled {
+        opacity: 0.5;
+        pointer-events: none;
+      }
 
-    .override-custom-row span {
-      font-size: 12px;
-      color: var(--secondary-text-color);
-    }
-
-    .override-error {
-      color: var(--error-color, #d32f2f);
-      font-size: 12px;
-      margin-top: 6px;
-    }
-  `;
+      .override-error {
+        color: var(--error-color, #d32f2f);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+    `,
+  ];
 
   updated(changedProps: Map<string, unknown>) {
     // Clear optimistic override state once server data catches up
@@ -252,9 +242,9 @@ export class RsOverrideSection extends LitElement {
                 icon=${t === "boost" ? "mdi:fire" : t === "eco" ? "mdi:leaf" : "mdi:thermometer"}
               ></ha-icon>
               ${t === "boost"
-                ? `${localize("override.comfort", this.language)} ${formatTemp(this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat, this.hass)}${tempUnit(this.hass)}`
+                ? localize("override.comfort", this.language)
                 : t === "eco"
-                  ? `${localize("override.eco", this.language)} ${formatTemp(this.climateMode === "cool_only" ? this.ecoCool : this.ecoHeat, this.hass)}${tempUnit(this.hass)}`
+                  ? localize("override.eco", this.language)
                   : localize("override.custom", this.language)}
             </button>
           `;
@@ -264,38 +254,39 @@ export class RsOverrideSection extends LitElement {
         ? html`
             ${this._overridePending === "custom"
               ? html`
-                  <div class="override-custom-row">
-                    <span>${localize("override.target", this.language)}</span>
-                    <input
-                      type="number"
-                      min=${tempRange(5, 35, this.hass).min}
-                      max=${tempRange(5, 35, this.hass).max}
-                      step=${tempStep(this.hass)}
-                      .value=${String(toDisplay(this._overrideCustomTemp, this.hass))}
-                      @input=${this._onOverrideCustomTempInput}
-                    />
-                    <span>${tempUnit(this.hass)}</span>
-                  </div>
+                  <ha-textfield
+                    class="override-target"
+                    type="number"
+                    .label=${localize("override.target", this.language)}
+                    .suffix=${tempUnit(this.hass)}
+                    min=${tempRange(5, 35, this.hass).min}
+                    max=${tempRange(5, 35, this.hass).max}
+                    step=${tempStep(this.hass)}
+                    .value=${String(toDisplay(this._overrideCustomTemp, this.hass))}
+                    @input=${this._onOverrideCustomTempInput}
+                  ></ha-textfield>
                 `
               : nothing}
             <div class="override-duration">
               <span class="override-duration-label"
                 >${localize("override.activate_for", this.language)}</span
               >
-              ${[
-                { label: "1h", hours: 1 },
-                { label: "2h", hours: 2 },
-                { label: "4h", hours: 4 },
-              ].map(
-                (opt) => html`
-                  <button
-                    class="override-dur-chip"
-                    @click=${() => this._onOverrideActivate(opt.hours)}
-                  >
-                    ${opt.label}
-                  </button>
-                `,
-              )}
+              <div class="override-dur-chips">
+                ${[
+                  { label: "1h", hours: 1 },
+                  { label: "2h", hours: 2 },
+                  { label: "4h", hours: 4 },
+                ].map(
+                  (opt) => html`
+                    <button
+                      class="override-dur-chip"
+                      @click=${() => this._onOverrideActivate(opt.hours)}
+                    >
+                      ${opt.label}
+                    </button>
+                  `,
+                )}
+              </div>
             </div>
           `
         : nothing}

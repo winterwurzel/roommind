@@ -1,5 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
+import "./rs-info-icon";
 
 @customElement("rs-toggle-row")
 export class RsToggleRow extends LitElement {
@@ -22,17 +23,17 @@ export class RsToggleRow extends LitElement {
 
     .toggle-text {
       display: flex;
-      flex-direction: column;
+      align-items: center;
       gap: 4px;
+      min-width: 0;
     }
 
     .toggle-label {
       font-weight: 500;
     }
 
-    .toggle-hint {
-      font-size: 13px;
-      color: var(--secondary-text-color);
+    ha-switch {
+      flex-shrink: 0;
     }
   `;
 
@@ -41,7 +42,7 @@ export class RsToggleRow extends LitElement {
       <div class="toggle-row">
         <div class="toggle-text">
           <span class="toggle-label">${this.label}</span>
-          ${this.hint ? html`<span class="toggle-hint">${this.hint}</span>` : nothing}
+          ${this.hint ? html`<rs-info-icon .text=${this.hint}></rs-info-icon>` : nothing}
         </div>
         <ha-switch
           .checked=${this.checked}

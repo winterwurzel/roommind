@@ -20,6 +20,26 @@ export class RsSettingsBase extends LitElement {
       display: block;
     }
 
+    /* Round HA's MDC-based inputs to match the rest of the design */
+    ha-textfield,
+    ha-select,
+    ha-entity-picker,
+    ha-combo-box {
+      --mdc-shape-small: 8px;
+      --mdc-shape-medium: 8px;
+      --md-filled-text-field-container-shape: 8px;
+      --md-outlined-text-field-container-shape: 8px;
+      display: block;
+      border-radius: 8px;
+      overflow: hidden;
+      isolation: isolate;
+      clip-path: inset(0 round 8px);
+    }
+
+    ha-entity-picker {
+      clip-path: inset(0 round 8px 8px 4px 4px);
+    }
+
     .settings-section {
       padding: 16px 0;
       border-top: 1px solid var(--divider-color);

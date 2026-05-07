@@ -3,6 +3,7 @@
   "panel.subtitle": "Klimasteuerung",
   "panel.tab.rooms": "Räume",
   "panel.tab.settings": "Einstellungen",
+  "panel.edit": "Raum bearbeiten",
   "panel.loading": "Laden...",
   "panel.no_areas": "Keine Bereiche in Home Assistant konfiguriert.",
   "panel.no_areas_hint": "Bereiche in den HA-Einstellungen anlegen.",
@@ -172,6 +173,8 @@
   "devices.other_area": "Anderer Bereich",
   "devices.type_thermostat": "Thermostat",
   "devices.type_ac": "Klimagerät",
+  "devices.type_label": "Typ",
+  "devices.select_to_configure": "Gerät zum Konfigurieren auswählen",
   "devices.heating_system_type": "Heizungstyp",
   "devices.heating_system_type_info": "Nach dem Abschalten geben Heizkörper und besonders Fußbodenheizungen gespeicherte Wärme weiter ab. RoomMind berücksichtigt diese Nachlaufwärme, um Überschwingen zu vermeiden und die Modellgenauigkeit zu verbessern. Fußbodenheizungen erhalten außerdem längere Mindestlaufzeiten.",
   "devices.system_type_none": "Standard (kein Nachlauf)",
@@ -431,6 +434,9 @@
   "presence.room_none_assigned": "Globale Regel — Eco wenn niemand zu Hause ist",
   "presence.ignore_toggle": "Anwesenheit ignorieren",
   "presence.ignore_hint": "Hier wird festgelegt, wie dieser Raum auf Anwesenheit reagiert. Unten kannst du einzelne Personen zuweisen. Der Raum wechselt auf Eco, wenn keine der zugewiesenen Personen zu Hause ist. Mit dem Toggle oben wird die Erkennung komplett übersprungen und der Raum heizt immer nach Zeitplan.",
+  "presence.help_ignore_title": "Was bewirkt \"Ignore presence\"?",
+  "presence.help_ignore_body": "Wenn aktiviert, ignoriert dieser Raum die Anwesenheitserkennung komplett. Er folgt immer seinem Zeitplan und wechselt nie aufgrund von Anwesenheit auf Eco. Nützlich für Räume, die unabhängig von Anwesenheit ihre Temperatur halten sollen, etwa Serverräume, Tierzimmer oder Gästezimmer mit Personen, die nicht in Home Assistant getrackt werden.",
+  "presence.tile_ignored": "Anwesenheitserkennung ist deaktiviert. Raum folgt immer dem Zeitplan.",
   "presence.away_action_label": "Aktion wenn niemand zuhause",
   "presence.away_action_eco": "Eco-Temperatur verwenden",
   "presence.away_action_off": "Geräte ausschalten",
@@ -526,5 +532,6 @@
   "heat_source.outdoor_threshold_suffix": "°C",
   "heat_source.ac_min_outdoor": "Min. Außentemp. für AC-Heizen",
   "heat_source.ac_min_outdoor_hint": "AC-Heizen unter dieser Temperatur komplett deaktivieren, um die Wärmepumpen-Hardware zu schützen.",
-  "heat_source.ac_min_outdoor_suffix": "°C"
+  "heat_source.ac_min_outdoor_suffix": "°C",
+  "heat_source.summary_disabled": "Intelligente Quellenwahl ist aus"
 }

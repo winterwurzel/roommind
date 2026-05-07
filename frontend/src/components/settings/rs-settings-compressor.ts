@@ -7,93 +7,97 @@ import type { HomeAssistant, CompressorGroup, ConflictResolution } from "../../t
 import { localize } from "../../utils/localize";
 import { getSelectValue } from "../../utils/events";
 import "../shared/rs-confirm-button";
+import { inputStyles } from "../../styles/input-styles";
 
 @customElement("rs-settings-compressor")
 export class RsSettingsCompressor extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property({ type: Array }) public compressorGroups: CompressorGroup[] = [];
 
-  static styles = css`
-    :host {
-      display: block;
-    }
-    .group-card {
-      border: 1px solid var(--divider-color);
-      border-radius: 8px;
-      padding: 16px;
-      margin-bottom: 16px;
-    }
-    .member-list {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      margin: 8px 0;
-    }
-    .member-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 4px 8px;
-      background: var(--card-background-color);
-      border-radius: 4px;
-    }
-    .member-name {
-      font-size: 14px;
-      flex: 1;
-    }
-    .member-area {
-      font-size: 12px;
-      color: var(--secondary-text-color);
-      margin-left: 4px;
-    }
-    .member-missing {
-      color: var(--error-color);
-    }
-    .field-row {
-      margin-top: 12px;
-    }
-    .field-hint {
-      font-size: 12px;
-      color: var(--secondary-text-color);
-      margin-top: 4px;
-    }
-    .section-label {
-      font-size: 14px;
-      font-weight: 500;
-      margin-top: 12px;
-      margin-bottom: 4px;
-    }
-    .add-button {
-      margin-top: 12px;
-    }
-    .delete-row {
-      margin-top: 16px;
-      display: flex;
-      justify-content: flex-end;
-    }
-    .no-groups {
-      color: var(--secondary-text-color);
-      font-size: 14px;
-      padding: 8px 0;
-    }
-    ha-textfield {
-      width: 100%;
-    }
-    ha-entity-picker {
-      width: 100%;
-    }
-    .number-fields {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-top: 12px;
-    }
-    @media (max-width: 500px) {
-      .number-fields {
-        grid-template-columns: 1fr;
+  static styles = [
+    inputStyles,
+    css`
+      :host {
+        display: block;
       }
-    }
-  `;
+      .group-card {
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .member-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin: 8px 0;
+      }
+      .member-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 8px;
+        background: var(--card-background-color);
+        border-radius: 4px;
+      }
+      .member-name {
+        font-size: 14px;
+        flex: 1;
+      }
+      .member-area {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        margin-left: 4px;
+      }
+      .member-missing {
+        color: var(--error-color);
+      }
+      .field-row {
+        margin-top: 12px;
+      }
+      .field-hint {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        margin-top: 4px;
+      }
+      .section-label {
+        font-size: 14px;
+        font-weight: 500;
+        margin-top: 12px;
+        margin-bottom: 4px;
+      }
+      .add-button {
+        margin-top: 12px;
+      }
+      .delete-row {
+        margin-top: 16px;
+        display: flex;
+        justify-content: flex-end;
+      }
+      .no-groups {
+        color: var(--secondary-text-color);
+        font-size: 14px;
+        padding: 8px 0;
+      }
+      ha-textfield {
+        width: 100%;
+      }
+      ha-entity-picker {
+        width: 100%;
+      }
+      .number-fields {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      @media (max-width: 500px) {
+        .number-fields {
+          grid-template-columns: 1fr;
+        }
+      }
+    `,
+  ];
 
   render() {
     const l = this.hass.language;
