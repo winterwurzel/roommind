@@ -80,6 +80,7 @@ async def _compute_target_forecast(
     mold_prevention_delta: float = 0.0,
     hours: float = 3.0,
     interval_minutes: int = 5,
+    schedule_blocks_cache: dict[str, dict] | None = None,
 ) -> list[dict]:
     """Compute target temperature forecast for the next N hours.
 
@@ -107,7 +108,7 @@ async def _compute_target_forecast(
     presence_away = not room.get("ignore_presence", False) and is_presence_away(hass, room, settings)
 
     entity_id = get_active_schedule_entity(hass, room)
-    schedule_blocks = await read_schedule_blocks(hass, entity_id) if entity_id else None
+    schedule_blocks = await read_schedule_blocks(hass, entity_id, cache=schedule_blocks_cache) if entity_id else None
 
     _hass = hass
     converter = lambda v: ha_temp_to_celsius(_hass, v)  # noqa: E731
@@ -262,6 +263,7 @@ async def build_analytics_data(
             room_config,
             settings,
             mold_prevention_delta=mold_delta,
+            schedule_blocks_cache=getattr(coordinator, "_schedule_blocks_cache", None),
         )
     except Exception:  # noqa: BLE001
         _LOGGER.debug("Target forecast computation failed for '%s'", area_id)

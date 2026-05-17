@@ -438,3 +438,56 @@ class TestPresenceDetection:
         room = data["rooms"]["living_room_abc12345"]
         assert room["target_temp"] == 17.0  # eco_temp
         assert room["force_off"] is False
+
+
+class TestScheduleServiceFailureRecovery:
+    """#308: a transient schedule.get_schedule failure must not silently jump
+    the target back to comfort_heat when the schedule has data.temperature
+    blocks. The coordinator caches the last good blocks per entity."""
+
+    @pytest.mark.asyncio
+    async def test_target_survives_transient_service_failure(self, hass, mock_config_entry):
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "heat_only",
+            "comfort_heat": 20.0,
+            "comfort_temp": 20.0,
+            "eco_heat": 15.0,
+            "eco_temp": 15.0,
+        }
+        store = _make_store_mock({"living_room_abc12345": room})
+        hass.data = {"roommind": {"store": store}}
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="on", schedule_attrs={}))
+
+        all_day_block = {
+            "from": "00:00:00",
+            "to": "23:59:59",
+            "data": {"temperature": 17.5},
+        }
+        schedule_data = {
+            day: [all_day_block]
+            for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        }
+
+        call_state = {"count": 0}
+
+        async def flaky_service(domain, service, data=None, **kwargs):
+            if domain == "schedule" and service == "get_schedule":
+                call_state["count"] += 1
+                if call_state["count"] == 1:
+                    eid = (data or {}).get("entity_id", "")
+                    return {eid: schedule_data}
+                raise RuntimeError("simulated transient HA failure")
+            return None
+
+        hass.services.async_call = AsyncMock(side_effect=flaky_service)
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        result1 = await coordinator._async_update_data()
+        assert result1["rooms"]["living_room_abc12345"]["target_temp"] == 17.5
+
+        result2 = await coordinator._async_update_data()
+        room2 = result2["rooms"]["living_room_abc12345"]
+        assert room2["target_temp"] == 17.5  # cached fallback kept us on the block temp
+        assert room2["target_temp"] != 20.0  # would be comfort_heat without the cache (bug)

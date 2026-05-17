@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from custom_components.roommind.const import TargetTemps
 from custom_components.roommind.utils.schedule_utils import (
     get_active_schedule_entity,
     make_target_resolver,
+    read_schedule_blocks,
     resolve_schedule_index,
     resolve_target_at_time,
 )
@@ -1147,3 +1151,166 @@ class TestResolveTargetsAtTimeSplitBlockTemps:
         )
         assert result.heat == 30.0
         assert result.cool == 30.0  # max(30, 27) = 30
+
+
+# ---------------------------------------------------------------------------
+# read_schedule_blocks — current behavior (regression safety net)
+# ---------------------------------------------------------------------------
+
+
+def _make_async_hass(service_result=None, service_raises: Exception | None = None):
+    """Create a hass mock with a configurable schedule.get_schedule response."""
+    hass = MagicMock()
+    if service_raises is not None:
+        hass.services.async_call = AsyncMock(side_effect=service_raises)
+    else:
+        hass.services.async_call = AsyncMock(return_value=service_result)
+    return hass
+
+
+_SAMPLE_BLOCKS = {
+    "monday": [{"from": "00:00:00", "to": "23:59:59", "data": {"temperature": 19.5}}],
+    "tuesday": [{"from": "00:00:00", "to": "23:59:59", "data": {"temperature": 19.5}}],
+}
+
+
+class TestReadScheduleBlocksCurrent:
+    """Document current behavior so refactors do not regress it."""
+
+    @pytest.mark.asyncio
+    async def test_empty_entity_id_returns_none(self):
+        hass = _make_async_hass()
+        result = await read_schedule_blocks(hass, "")
+        assert result is None
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_schedule_entity_returns_none(self):
+        hass = _make_async_hass()
+        result = await read_schedule_blocks(hass, "binary_sensor.something")
+        assert result is None
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_successful_call_returns_blocks(self):
+        hass = _make_async_hass(service_result={"schedule.heating": _SAMPLE_BLOCKS})
+        result = await read_schedule_blocks(hass, "schedule.heating")
+        assert result == _SAMPLE_BLOCKS
+
+    @pytest.mark.asyncio
+    async def test_service_raises_returns_none(self):
+        hass = _make_async_hass(service_raises=RuntimeError("boom"))
+        result = await read_schedule_blocks(hass, "schedule.heating")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_falsy_response_returns_none(self):
+        hass = _make_async_hass(service_result=None)
+        result = await read_schedule_blocks(hass, "schedule.heating")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# read_schedule_blocks — caching behavior (#308)
+# ---------------------------------------------------------------------------
+
+
+class TestReadScheduleBlocksCache:
+    """Cache successful reads to recover from transient service failures."""
+
+    @pytest.mark.asyncio
+    async def test_success_writes_into_cache(self):
+        hass = _make_async_hass(service_result={"schedule.heating": _SAMPLE_BLOCKS})
+        cache: dict = {}
+        result = await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        assert result == _SAMPLE_BLOCKS
+        assert cache["schedule.heating"] == _SAMPLE_BLOCKS
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_cached_blocks(self):
+        cache: dict = {"schedule.heating": _SAMPLE_BLOCKS}
+        hass = _make_async_hass(service_raises=RuntimeError("boom"))
+        result = await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        assert result == _SAMPLE_BLOCKS
+
+    @pytest.mark.asyncio
+    async def test_empty_response_returns_cached_blocks(self):
+        cache: dict = {"schedule.heating": _SAMPLE_BLOCKS}
+        hass = _make_async_hass(service_result=None)
+        result = await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        assert result == _SAMPLE_BLOCKS
+
+    @pytest.mark.asyncio
+    async def test_response_missing_entity_returns_cached_blocks(self):
+        """If get_schedule returns data for the wrong entity, treat as failure."""
+        cache: dict = {"schedule.heating": _SAMPLE_BLOCKS}
+        hass = _make_async_hass(service_result={"schedule.other": _SAMPLE_BLOCKS})
+        result = await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        assert result == _SAMPLE_BLOCKS
+
+    @pytest.mark.asyncio
+    async def test_failure_without_cache_entry_returns_none(self):
+        cache: dict = {}
+        hass = _make_async_hass(service_raises=RuntimeError("boom"))
+        result = await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_failure_cache_none_returns_none(self):
+        hass = _make_async_hass(service_raises=RuntimeError("boom"))
+        result = await read_schedule_blocks(hass, "schedule.heating", cache=None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_success_overwrites_stale_cache(self):
+        cache: dict = {"schedule.heating": {"monday": []}}
+        hass = _make_async_hass(service_result={"schedule.heating": _SAMPLE_BLOCKS})
+        result = await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        assert result == _SAMPLE_BLOCKS
+        assert cache["schedule.heating"] == _SAMPLE_BLOCKS
+
+    @pytest.mark.asyncio
+    async def test_cache_isolated_per_entity(self):
+        cache: dict = {"schedule.upstairs": _SAMPLE_BLOCKS}
+        hass = _make_async_hass(service_raises=RuntimeError("boom"))
+        result = await read_schedule_blocks(hass, "schedule.downstairs", cache=cache)
+        assert result is None
+        assert "schedule.upstairs" in cache
+
+
+# ---------------------------------------------------------------------------
+# read_schedule_blocks — logging contract (#308)
+# ---------------------------------------------------------------------------
+
+
+class TestReadScheduleBlocksLogging:
+    """Verify log levels: WARNING when cache is empty, DEBUG when cache hides failure."""
+
+    @pytest.mark.asyncio
+    async def test_warning_when_cache_empty(self, caplog):
+        hass = _make_async_hass(service_raises=RuntimeError("boom"))
+        cache: dict = {}
+        with caplog.at_level(logging.DEBUG, logger="custom_components.roommind.utils.schedule_utils"):
+            await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("schedule.heating" in r.getMessage() for r in warning_records)
+
+    @pytest.mark.asyncio
+    async def test_debug_only_when_cache_covers_failure(self, caplog):
+        cache: dict = {"schedule.heating": _SAMPLE_BLOCKS}
+        hass = _make_async_hass(service_raises=RuntimeError("boom"))
+        with caplog.at_level(logging.DEBUG, logger="custom_components.roommind.utils.schedule_utils"):
+            await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert warning_records == []
+        assert any("cached blocks" in r.getMessage() for r in debug_records)
+
+    @pytest.mark.asyncio
+    async def test_success_logs_nothing(self, caplog):
+        hass = _make_async_hass(service_result={"schedule.heating": _SAMPLE_BLOCKS})
+        cache: dict = {}
+        with caplog.at_level(logging.DEBUG, logger="custom_components.roommind.utils.schedule_utils"):
+            await read_schedule_blocks(hass, "schedule.heating", cache=cache)
+        relevant = [r for r in caplog.records if r.name == "custom_components.roommind.utils.schedule_utils"]
+        assert relevant == []

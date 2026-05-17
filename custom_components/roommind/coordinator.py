@@ -151,6 +151,8 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         self._climate_control_switch_areas: set[str] = set()
         self._binary_sensor_entity_areas: set[str] = set()
         self._climate_entity_areas: set[str] = set()
+        # Per-entity cache of schedule blocks; fallback when schedule.get_schedule fails (#308)
+        self._schedule_blocks_cache: dict[str, dict] = {}
         # Entity platform callbacks, set by platform async_setup_entry
         self.async_add_entities: Any = None
         self.async_add_switch_entities: Any = None
@@ -550,7 +552,11 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         )
 
         schedule_entity_id = get_active_schedule_entity(self.hass, room)
-        schedule_blocks = await read_schedule_blocks(self.hass, schedule_entity_id) if schedule_entity_id else None
+        schedule_blocks = (
+            await read_schedule_blocks(self.hass, schedule_entity_id, cache=self._schedule_blocks_cache)
+            if schedule_entity_id
+            else None
+        )
 
         # Determine dual heat/cool target temperatures
         # Returns TargetTemps(heat, cool). None values mean "force off".

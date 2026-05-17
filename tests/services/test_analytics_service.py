@@ -142,6 +142,52 @@ class TestComputeTargetForecast:
             assert len(result) == 1
             assert result[0]["target_temp"] == 21.0
 
+    @pytest.mark.asyncio
+    async def test_cache_keeps_forecast_when_service_fails(self):
+        """#308: when schedule.get_schedule raises but a cache entry exists,
+        the forecast must use the cached block temperature instead of
+        falling back to comfort/eco."""
+        hass = MagicMock()
+        hass.config.units.temperature_unit = "°C"
+        # No state for the schedule selector -> first schedule wins
+        hass.states.get = MagicMock(return_value=None)
+        hass.services.async_call = AsyncMock(side_effect=RuntimeError("boom"))
+
+        room = {
+            "area_id": "living_room",
+            "schedules": [{"entity_id": "schedule.heating"}],
+            "schedule_selector_entity": "",
+            "comfort_heat": 21.0,
+            "comfort_cool": 24.0,
+            "eco_heat": 17.0,
+            "eco_cool": 27.0,
+            "climate_mode": "heat_only",
+        }
+        settings = {"presence_away_action": "eco", "schedule_off_action": "eco"}
+
+        all_day = {"from": "00:00:00", "to": "23:59:59", "data": {"temperature": 16.5}}
+        schedule_data = {
+            day: [all_day] for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        }
+        cache = {"schedule.heating": schedule_data}
+
+        with patch(
+            "custom_components.roommind.utils.presence_utils.is_presence_away",
+            return_value=False,
+        ):
+            result = await _compute_target_forecast(
+                hass,
+                room,
+                settings,
+                hours=0.1,
+                interval_minutes=5,
+                schedule_blocks_cache=cache,
+            )
+
+        assert result, "forecast should not be empty"
+        heat_targets = {point["heat_target"] for point in result if point.get("heat_target") is not None}
+        assert heat_targets == {16.5}
+
 
 # ---------------------------------------------------------------------------
 # build_analytics_data -- edge cases

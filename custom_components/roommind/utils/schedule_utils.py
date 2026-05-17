@@ -220,10 +220,20 @@ def get_active_schedule_entity(
 async def read_schedule_blocks(
     hass: HomeAssistant,
     schedule_entity_id: str,
+    cache: dict[str, dict] | None = None,
 ) -> dict | None:
-    """Read weekly schedule blocks via schedule.get_schedule service."""
+    """Read weekly schedule blocks via schedule.get_schedule service.
+
+    When ``cache`` is provided, successful reads are stored under the entity ID
+    so subsequent failures fall back to the last good blocks. Without a cache,
+    transient service failures cause the caller's target resolution to silently
+    revert to comfort_temp (see #308).
+    """
     if not schedule_entity_id or not schedule_entity_id.startswith("schedule."):
         return None
+
+    blocks: dict | None = None
+    error: Exception | None = None
     try:
         response = await hass.services.async_call(
             "schedule",
@@ -232,11 +242,33 @@ async def read_schedule_blocks(
             blocking=True,
             return_response=True,
         )
-        if response:
-            result = response.get(schedule_entity_id, {})
-            return dict(result) if isinstance(result, dict) else None
-    except Exception:  # noqa: BLE001
-        _LOGGER.debug("schedule.get_schedule failed for %s", schedule_entity_id)
+        if response and schedule_entity_id in response:
+            result = response[schedule_entity_id]
+            if isinstance(result, dict):
+                blocks = dict(result)
+    except Exception as err:  # noqa: BLE001
+        error = err
+
+    if blocks is not None:
+        if cache is not None:
+            cache[schedule_entity_id] = blocks
+        return blocks
+
+    cached = cache.get(schedule_entity_id) if cache is not None else None
+    if cached is not None:
+        _LOGGER.debug(
+            "schedule.get_schedule unavailable for %s; using cached blocks (error=%r)",
+            schedule_entity_id,
+            error,
+        )
+        return cached
+
+    _LOGGER.warning(
+        "schedule.get_schedule unavailable for %s and no cached blocks; "
+        "target will fall back to comfort/eco (error=%r)",
+        schedule_entity_id,
+        error,
+    )
     return None
 
 
