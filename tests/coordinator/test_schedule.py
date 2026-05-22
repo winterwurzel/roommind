@@ -491,3 +491,192 @@ class TestScheduleServiceFailureRecovery:
         room2 = result2["rooms"]["living_room_abc12345"]
         assert room2["target_temp"] == 17.5  # cached fallback kept us on the block temp
         assert room2["target_temp"] != 20.0  # would be comfort_heat without the cache (bug)
+
+
+class TestScheduleEntityUnavailableFallback:
+    """#308 follow-up: when the schedule entity state flickers to
+    unavailable/unknown, target must not silently jump to comfort_heat.
+    Prefer cached blocks if present; treat as schedule-off when outside
+    any block; fall back to comfort_heat only when no cache is available."""
+
+    @staticmethod
+    def _all_day_schedule(temperature: float) -> dict:
+        block = {
+            "from": "00:00:00",
+            "to": "23:59:59",
+            "data": {"temperature": temperature},
+        }
+        return {day: [block] for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]}
+
+    @pytest.mark.asyncio
+    async def test_state_unavailable_uses_cached_block_temp(self, hass, mock_config_entry):
+        """State briefly 'unavailable' but cached block active -> block temp wins."""
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "heat_only",
+            "comfort_heat": 20.0,
+            "comfort_temp": 20.0,
+            "eco_heat": 15.0,
+            "eco_temp": 15.0,
+        }
+        store = _make_store_mock({"living_room_abc12345": room})
+        hass.data = {"roommind": {"store": store}}
+
+        schedule_data = self._all_day_schedule(17.5)
+        call_state = {"count": 0}
+
+        async def service_with_one_success(domain, service, data=None, **kwargs):
+            if domain == "schedule" and service == "get_schedule":
+                call_state["count"] += 1
+                eid = (data or {}).get("entity_id", "")
+                return {eid: schedule_data}
+            return None
+
+        hass.services.async_call = AsyncMock(side_effect=service_with_one_success)
+
+        # First cycle: schedule "on" -> cache primed
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="on"))
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        result1 = await coordinator._async_update_data()
+        assert result1["rooms"]["living_room_abc12345"]["target_temp"] == 17.5
+
+        # Second cycle: schedule entity flickers to "unavailable"
+        # Without the fix: target would jump to comfort_heat (20.0).
+        # With the fix: cached block keeps target at 17.5.
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="unavailable"))
+        result2 = await coordinator._async_update_data()
+        assert result2["rooms"]["living_room_abc12345"]["target_temp"] == 17.5
+
+    @pytest.mark.asyncio
+    async def test_state_unknown_uses_cached_block_temp(self, hass, mock_config_entry):
+        """State 'unknown' behaves like 'unavailable' for fallback purposes."""
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "heat_only",
+            "comfort_heat": 20.0,
+            "comfort_temp": 20.0,
+            "eco_heat": 15.0,
+            "eco_temp": 15.0,
+        }
+        store = _make_store_mock({"living_room_abc12345": room})
+        hass.data = {"roommind": {"store": store}}
+
+        schedule_data = self._all_day_schedule(16.0)
+
+        async def get_schedule(domain, service, data=None, **kwargs):
+            if domain == "schedule" and service == "get_schedule":
+                eid = (data or {}).get("entity_id", "")
+                return {eid: schedule_data}
+            return None
+
+        hass.services.async_call = AsyncMock(side_effect=get_schedule)
+
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="on"))
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        await coordinator._async_update_data()
+
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="unknown"))
+        result = await coordinator._async_update_data()
+        assert result["rooms"]["living_room_abc12345"]["target_temp"] == 16.0
+
+    @pytest.mark.asyncio
+    async def test_state_unavailable_outside_block_falls_back_to_eco(self, hass, mock_config_entry):
+        """State unavailable + cached blocks but no block at 'now' -> eco_heat (schedule_off_action='eco')."""
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "heat_only",
+            "comfort_heat": 20.0,
+            "comfort_temp": 20.0,
+            "eco_heat": 15.0,
+            "eco_temp": 15.0,
+        }
+        store = _make_store_mock({"living_room_abc12345": room})
+        hass.data = {"roommind": {"store": store}}
+
+        # Empty schedule: no blocks for any day -> find_active_block always returns None
+        empty_schedule = {
+            day: [] for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        }
+
+        async def get_schedule(domain, service, data=None, **kwargs):
+            if domain == "schedule" and service == "get_schedule":
+                eid = (data or {}).get("entity_id", "")
+                return {eid: empty_schedule}
+            return None
+
+        hass.services.async_call = AsyncMock(side_effect=get_schedule)
+
+        # Prime the cache via a normal "on" cycle
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="on"))
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        await coordinator._async_update_data()
+
+        # State flickers to unavailable, no block at now -> eco_heat
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="unavailable"))
+        result = await coordinator._async_update_data()
+        assert result["rooms"]["living_room_abc12345"]["target_temp"] == 15.0
+
+    @pytest.mark.asyncio
+    async def test_state_unavailable_no_cache_falls_back_to_comfort(self, hass, mock_config_entry):
+        """State unavailable AND no cached blocks (first cycle after restart) -> comfort_heat.
+
+        This preserves the original behavior as a last-resort fallback when there
+        is genuinely no signal about the schedule.
+        """
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "heat_only",
+            "comfort_heat": 22.0,
+            "comfort_temp": 22.0,
+            "eco_heat": 15.0,
+            "eco_temp": 15.0,
+        }
+        store = _make_store_mock({"living_room_abc12345": room})
+        hass.data = {"roommind": {"store": store}}
+
+        # Service always fails: nothing ever lands in the cache
+        hass.services.async_call = AsyncMock(side_effect=RuntimeError("schedule service down"))
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="unavailable"))
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        result = await coordinator._async_update_data()
+        assert result["rooms"]["living_room_abc12345"]["target_temp"] == 22.0
+
+    @pytest.mark.asyncio
+    async def test_state_unavailable_outside_block_off_action_force_off(self, hass, mock_config_entry):
+        """State unavailable + cached blocks but no block + schedule_off_action='off' -> force_off."""
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "heat_only",
+            "comfort_heat": 20.0,
+            "comfort_temp": 20.0,
+            "eco_heat": 15.0,
+            "eco_temp": 15.0,
+        }
+        store = _make_store_mock(
+            {"living_room_abc12345": room},
+            settings={"schedule_off_action": "off"},
+        )
+        hass.data = {"roommind": {"store": store}}
+
+        empty_schedule = {
+            day: [] for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        }
+
+        async def get_schedule(domain, service, data=None, **kwargs):
+            if domain == "schedule" and service == "get_schedule":
+                eid = (data or {}).get("entity_id", "")
+                return {eid: empty_schedule}
+            return None
+
+        hass.services.async_call = AsyncMock(side_effect=get_schedule)
+
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="on"))
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        await coordinator._async_update_data()
+
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(schedule_state="unavailable"))
+        result = await coordinator._async_update_data()
+        room_state = result["rooms"]["living_room_abc12345"]
+        assert room_state["force_off"] is True
+        assert room_state["mode"] == "idle"

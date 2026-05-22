@@ -1459,10 +1459,22 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             return TargetTemps(heat=comfort_heat, cool=comfort_cool)
 
         state = self.hass.states.get(schedule_entity_id)
-        if state is None or state.state in ("unavailable", "unknown"):
-            return TargetTemps(heat=comfort_heat, cool=comfort_cool)
+        state_unavailable = state is None or state.state in ("unavailable", "unknown")
 
-        if state.state == SCHEDULE_STATE_ON:
+        if state_unavailable:
+            # #308 follow-up: when the schedule entity briefly flickers to
+            # unavailable/unknown, derive on/off from cached blocks instead of
+            # jumping to comfort_heat. Without cached blocks we have no signal,
+            # so comfort_heat remains the last-resort fallback.
+            if schedule_blocks is None:
+                return TargetTemps(heat=comfort_heat, cool=comfort_cool)
+            if find_active_block(schedule_blocks, time.time()) is None:
+                if settings.get("schedule_off_action", "eco") == "off":
+                    return TargetTemps(heat=None, cool=None)
+                return TargetTemps(heat=eco_heat, cool=eco_cool)
+            # Block is active right now: fall through to block resolution below.
+
+        if state_unavailable or state.state == SCHEDULE_STATE_ON:
             if schedule_blocks is not None:
                 # Read all temperature fields from block data.
                 # HA does not expose custom data keys (heat_temperature, cool_temperature)
