@@ -151,6 +151,7 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         self._climate_control_switch_areas: set[str] = set()
         self._binary_sensor_entity_areas: set[str] = set()
         self._climate_entity_areas: set[str] = set()
+        self._select_entity_areas: set[str] = set()
         # Per-entity cache of schedule blocks; fallback when schedule.get_schedule fails (#308)
         self._schedule_blocks_cache: dict[str, dict] = {}
         # Entity platform callbacks, set by platform async_setup_entry
@@ -158,6 +159,7 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         self.async_add_switch_entities: Any = None
         self.async_add_climate_entities: Any = None
         self.async_add_binary_sensor_entities: Any = None
+        self.async_add_select_entities: Any = None
 
     async def _async_update_data(self) -> dict:
         """Fetch and compute state for all rooms.
@@ -1550,6 +1552,16 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             self.async_add_switch_entities([RoomMindClimateControlSwitch(self, area_id)])
             self._climate_control_switch_areas.add(area_id)
 
+        if (
+            area_id not in self._select_entity_areas
+            and hasattr(self, "async_add_select_entities")
+            and self.async_add_select_entities
+        ):
+            from .select import _create_room_selects
+
+            self.async_add_select_entities(_create_room_selects(self, area_id))
+            self._select_entity_areas.add(area_id)
+
         # Cover entities: only create when covers are configured.
         # Not removed on save — cleanup_orphaned_entities() handles that at startup
         # so brief config changes don't break user automations.
@@ -1605,6 +1617,7 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         self._climate_control_switch_areas.discard(area_id)
         self._binary_sensor_entity_areas.discard(area_id)
         self._climate_entity_areas.discard(area_id)
+        self._select_entity_areas.discard(area_id)
         self._model_manager.remove_room(area_id)
         self._heat_source_states.pop(area_id, None)
         if self._history_store:
@@ -1624,7 +1637,7 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         registry = er.async_get(self.hass)
 
         # Known valid suffixes for each condition
-        always_valid = ("_target_temp", "_mode", "_override", "_climate_control")
+        always_valid = ("_target_temp", "_mode", "_override", "_climate_control", "_climate_mode")
         cover_only = ("_cover_auto", "_cover_paused")
         # Global entities (not per-room) that should never be cleaned up
         global_uids = {f"{DOMAIN}_vacation"}

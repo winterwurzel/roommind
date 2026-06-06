@@ -203,6 +203,29 @@ class TestRoomMindCoordinator:
         coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_async_room_added_creates_select_entity(self, hass, mock_config_entry):
+        """Test that async_room_added creates the climate mode select entity."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        coordinator.async_request_refresh = AsyncMock()
+        mock_add_select_entities = MagicMock()
+        coordinator.async_add_select_entities = mock_add_select_entities
+
+        room = {"area_id": "bedroom_abc12345"}
+        await coordinator.async_room_added(room)
+
+        mock_add_select_entities.assert_called_once()
+        entities = mock_add_select_entities.call_args[0][0]
+        assert len(entities) == 1
+
+        from custom_components.roommind.select import RoomMindClimateModeSelect
+
+        assert isinstance(entities[0], RoomMindClimateModeSelect)
+        assert entities[0]._attr_unique_id == "roommind_bedroom_abc12345_climate_mode"
+        assert "bedroom_abc12345" in coordinator._select_entity_areas
+
+        coordinator.async_request_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_async_room_added_no_callback_does_not_crash(self, hass, mock_config_entry):
         """Test that async_room_added works even without async_add_entities set."""
         coordinator = _create_coordinator(hass, mock_config_entry)
