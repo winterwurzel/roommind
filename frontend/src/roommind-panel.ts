@@ -783,7 +783,7 @@ export class RoomMindPanel extends LitElement {
 
   private _onBackFromDetail() {
     this._selectedAreaId = null;
-    this._navigate("");
+    this._navigate("", true);
   }
 
   private async _onDeleteRoom() {
@@ -801,7 +801,7 @@ export class RoomMindPanel extends LitElement {
         area_id: this._selectedAreaId,
       });
       this._selectedAreaId = null;
-      this._navigate("");
+      this._navigate("", true);
       this._loadRooms();
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -982,8 +982,13 @@ export class RoomMindPanel extends LitElement {
     }
   }
 
-  private _navigate(path: string) {
-    history.replaceState(null, "", `/roommind${path}`);
+  private _navigate(path: string, replace = false) {
+    const url = `/roommind${path}`;
+    if (window.location.pathname === url) {
+      return;
+    }
+    const method = replace ? "replaceState" : "pushState";
+    history[method](null, "", url);
     window.dispatchEvent(new Event("location-changed"));
   }
 
