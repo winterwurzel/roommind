@@ -325,14 +325,10 @@ export class RsRoomDetail extends LitElement {
       this._heatSourceAcMinOutdoor = -15.0;
     }
     this._dirty = false;
-
-    // Unconfigured rooms open the device-edit dialog automatically.
-    if (this._devices.length === 0 && this._editing === null) {
-      this._editing = "devices";
-    }
   }
 
-  private _openEdit = (section: EditableSection) => () => {
+  private _openEdit = (section: EditableSection) => (e: CustomEvent<{ trusted?: boolean }>) => {
+    if (!e.detail?.trusted) return;
     this._editing = section;
   };
 

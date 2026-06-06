@@ -94,8 +94,14 @@ export class RsSectionCard extends LitElement {
     `;
   }
 
-  private _onEditClick() {
-    this.dispatchEvent(new CustomEvent("edit-click", { bubbles: true, composed: true }));
+  private _onEditClick(e: MouseEvent) {
+    this.dispatchEvent(
+      new CustomEvent("edit-click", {
+        bubbles: true,
+        composed: true,
+        detail: { trusted: e.isTrusted },
+      }),
+    );
   }
 }
 
