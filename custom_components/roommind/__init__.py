@@ -174,7 +174,6 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         _LOGGER.debug("RoomMind static path already registered")
 
     try:
-        panel_js_version = panel_js.stat().st_mtime_ns
         async_register_built_in_panel(
             hass,
             component_name="custom",
@@ -186,7 +185,7 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
                     "name": "roommind-panel",
                     "embed_iframe": False,
                     "trust_external": False,
-                    "js_url": f"/roommind/roommind-panel.js?v={panel_js_version}",
+                    "js_url": "/roommind/roommind-panel.js",
                 }
             },
         )
