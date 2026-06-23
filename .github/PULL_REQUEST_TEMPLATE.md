@@ -10,5 +10,5 @@
 
 - [ ] Backend tests pass (`pytest tests/ -v`)
 - [ ] Frontend builds without errors (`cd frontend && npm run build`)
-- [ ] New strings added to both `en.json` and `de.json` (if applicable)
+- [ ] New strings added to `en.json`, `de.json` and `fr.json`. (if applicable)
 - [ ] Tested on mobile layout (if UI change)

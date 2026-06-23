@@ -74,7 +74,7 @@ class TestRoomMindCoordinator:
         assert climate_calls[1] == call(
             "climate",
             "set_temperature",
-            {"entity_id": "climate.living_room", "temperature": 30},
+            {"entity_id": "climate.living_room", "temperature": 30, "hvac_mode": "heat"},
             blocking=True,
             context=ANY,
         )

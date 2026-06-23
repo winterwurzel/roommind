@@ -95,7 +95,9 @@ class TestCoordinatorMPCIntegration:
         store.get_settings.return_value = {"weather_entity": "weather.home"}
         hass.data = {"roommind": {"store": store}}
 
-        hass.states.get = MagicMock(side_effect=make_mock_states_get(temp="17.0", humidity="50.0"))
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(temp="17.0", humidity="50.0", extra={"weather.home": ("cloudy", None)})
+        )
 
         async def mock_async_call(domain, service, data=None, **kwargs):
             if domain == "weather" and service == "get_forecasts":

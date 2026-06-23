@@ -105,7 +105,9 @@ class TestReadWeatherForecast:
     async def test_fallback_state_is_none(self, hass, mock_config_entry):
         coordinator = _create_coordinator(hass, mock_config_entry)
         hass.services.async_call = AsyncMock(side_effect=RuntimeError("fail"))
-        hass.states.get = MagicMock(return_value=None)
+        available_state = MagicMock()
+        available_state.state = "cloudy"
+        hass.states.get = MagicMock(side_effect=[available_state, None])
 
         result = await coordinator._weather_manager.async_read_forecast({"weather_entity": "weather.home"})
         assert result == []

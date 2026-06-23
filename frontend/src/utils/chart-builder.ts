@@ -312,7 +312,14 @@ export function buildChartOptions(
             }
           }
         }
-        return markup;
+        // HA 2026.6's ha-chart-base pipes the tooltip formatter result through
+        // Lit's render() (wrapLitTooltipFormatter). A returned string is
+        // rendered as escaped text — the raw HTML shows up as code. Returning
+        // an HTMLElement renders correctly there and is also a valid return
+        // value for ECharts' html tooltip on older HA, so both paths work.
+        const tooltipEl = document.createElement("div");
+        tooltipEl.innerHTML = markup;
+        return tooltipEl;
       },
     },
     grid: {

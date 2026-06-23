@@ -30,6 +30,18 @@ class WeatherManager:
             self._outdoor_forecast = []
             return []
 
+        # Calling get_forecasts on a missing/unavailable entity makes HA core
+        # log a warning (e.g. during startup before the weather integration
+        # has loaded, see #326) — skip until the entity is available.
+        entity_state = self.hass.states.get(weather_entity)
+        if entity_state is None or entity_state.state in ("unavailable", "unknown"):
+            _LOGGER.debug(
+                "Weather entity %s not available, skipping forecast read",
+                weather_entity,
+            )
+            self._outdoor_forecast = []
+            return []
+
         # Modern approach: use weather.get_forecasts service (HA 2024.6+)
         try:
             response = await self.hass.services.async_call(

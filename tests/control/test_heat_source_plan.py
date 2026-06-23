@@ -611,6 +611,59 @@ async def test_heat_source_plan_ac_heat_cool_mode():
 
 
 @pytest.mark.asyncio
+async def test_heat_source_plan_ac_auto_mode():
+    """AC with 'auto' but no 'heat'/'heat_cool' uses auto hvac_mode, bundled in set_temperature (#337)."""
+    from custom_components.roommind.managers.heat_source_orchestrator import DeviceCommand, HeatSourcePlan
+
+    _last_commands.clear()
+    hass = build_hass()
+    ac_state = _make_ac_state_for_plan(["auto", "cool", "off"], current_state="off")
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(thermostats=[], acs=["climate.ac1"])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    plan = HeatSourcePlan(
+        commands=[
+            DeviceCommand(
+                entity_id="climate.ac1",
+                role="secondary",
+                device_type="ac",
+                active=True,
+                power_fraction=0.5,
+                reason="test",
+            ),
+        ],
+        active_sources="secondary",
+        reason="test",
+    )
+    # current=20, ac_boost=30 -> 20 + 0.5*(30-20) = 25.0
+    await ctrl.async_apply(
+        mode=MODE_HEATING,
+        targets=TargetTemps(heat=21.0, cool=None),
+        power_fraction=0.5,
+        current_temp=20.0,
+        heat_source_plan=plan,
+    )
+
+    calls = hass.services.async_call.call_args_list
+    ac_mode = [c for c in calls if c[0][1] == "set_hvac_mode" and c[0][2]["entity_id"] == "climate.ac1"]
+    assert len(ac_mode) == 1
+    assert ac_mode[0][0][2]["hvac_mode"] == "auto"
+
+    ac_temp = [c for c in calls if c[0][1] == "set_temperature" and c[0][2]["entity_id"] == "climate.ac1"]
+    assert len(ac_temp) == 1
+    assert ac_temp[0][0][2]["temperature"] == 25.0
+    assert ac_temp[0][0][2]["hvac_mode"] == "auto"
+
+
+@pytest.mark.asyncio
 async def test_heat_source_plan_managed_mode_no_external_sensor():
     """Managed mode (no external sensor, heat_only): TRV and AC both get effective_target."""
     from custom_components.roommind.managers.heat_source_orchestrator import DeviceCommand, HeatSourcePlan
@@ -881,6 +934,71 @@ async def test_apply_orchestrated_forced_on_ac():
     temp_calls = [c for c in calls if c[0][2].get("entity_id") == "climate.ac" and c[0][1] == "set_temperature"]
     assert len(temp_calls) == 1
     assert temp_calls[0][0][2]["temperature"] == 21.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hvac_modes", "expected_mode"),
+    [
+        (["heat_cool", "cool", "off"], "heat_cool"),
+        (["auto", "cool", "off"], "auto"),
+        (["cool", "off"], None),
+    ],
+)
+async def test_apply_orchestrated_forced_on_ac_mode_fallbacks(hvac_modes, expected_mode):
+    """Orchestrated forced_on AC without 'heat' falls back to heat_cool/auto or skips entirely."""
+    from custom_components.roommind.managers.heat_source_orchestrator import (
+        DeviceCommand,
+        HeatSourcePlan,
+    )
+
+    _last_commands.clear()
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": hvac_modes, "min_temp": 16.0}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(thermostats=[], acs=["climate.ac"])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=5.0,
+        settings={"heat_source_orchestration": True},
+        has_external_sensor=True,
+    )
+    plan = HeatSourcePlan(
+        commands=[
+            DeviceCommand(
+                entity_id="climate.ac",
+                role="primary",
+                device_type="ac",
+                active=False,
+                power_fraction=0.0,
+                reason="test",
+            ),
+        ],
+        active_sources="none",
+        reason="test",
+    )
+    await ctrl.async_apply(
+        "heating",
+        TargetTemps(heat=21.0, cool=24.0),
+        heat_source_plan=plan,
+        compressor_forced_on={"climate.ac"},
+    )
+    calls = [c for c in hass.services.async_call.call_args_list if c[0][2].get("entity_id") == "climate.ac"]
+    if expected_mode is None:
+        assert not calls
+    else:
+        mode_calls = [c for c in calls if c[0][1] == "set_hvac_mode"]
+        assert len(mode_calls) == 1
+        assert mode_calls[0][0][2]["hvac_mode"] == expected_mode
+        temp_calls = [c for c in calls if c[0][1] == "set_temperature"]
+        assert len(temp_calls) == 1
+        assert temp_calls[0][0][2]["temperature"] == 21.0
+        assert temp_calls[0][0][2]["hvac_mode"] == expected_mode
 
 
 @pytest.mark.asyncio
