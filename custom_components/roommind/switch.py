@@ -39,6 +39,7 @@ async def async_setup_entry(
     rooms = store.get_rooms()
     for area_id, room in rooms.items():
         entities.append(RoomMindClimateControlSwitch(coordinator, area_id))
+        entities.append(RoomMindPreferElectricSwitch(coordinator, area_id))
         coordinator._climate_control_switch_areas.add(area_id)
         if room.get("covers"):
             entities.extend(_create_room_switches(coordinator, area_id))
@@ -105,6 +106,41 @@ class RoomMindClimateControlSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         store = self.coordinator.hass.data[DOMAIN]["store"]
         await store.async_update_room(self._area_id, {"climate_control_enabled": False})
+        await self.coordinator.async_request_refresh()
+
+
+class RoomMindPreferElectricSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to prefer electric heat (AC) over the boiler for one room.
+
+    Intended for surplus-PV heating: while on, heat source orchestration picks the
+    AC regardless of outdoor temperature and never escalates to running the boiler
+    alongside it. Has no effect in rooms without both device types.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: RoomMindCoordinator, area_id: str) -> None:
+        super().__init__(coordinator)
+        self._area_id = area_id
+        self._attr_unique_id = f"{DOMAIN}_{area_id}_prefer_electric"
+        self._attr_name = f"{area_id} Prefer Electric Heat"
+        self._attr_icon = "mdi:solar-power-variant"
+        self.entity_id = f"switch.{DOMAIN}_{area_id}_prefer_electric"
+
+    @property
+    def is_on(self) -> bool:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        room = store.get_room(self._area_id)
+        return bool(room.get("prefer_electric_heat", False)) if room else False
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        await store.async_update_room(self._area_id, {"prefer_electric_heat": True})
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        await store.async_update_room(self._area_id, {"prefer_electric_heat": False})
         await self.coordinator.async_request_refresh()
 
 

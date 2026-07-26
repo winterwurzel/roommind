@@ -272,6 +272,7 @@ class RoomMindStore:
                 "heat_source_outdoor_threshold", DEFAULT_HEAT_SOURCE_OUTDOOR_THRESHOLD
             ),
             "heat_source_ac_min_outdoor": config.get("heat_source_ac_min_outdoor", DEFAULT_HEAT_SOURCE_AC_MIN_OUTDOOR),
+            "prefer_electric_heat": config.get("prefer_electric_heat", False),
             "climate_control_enabled": config.get("climate_control_enabled", True),
         }
         # Directional device sync for new rooms (truthiness check, not just presence)

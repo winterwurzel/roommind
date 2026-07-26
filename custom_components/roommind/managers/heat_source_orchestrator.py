@@ -165,9 +165,18 @@ def evaluate_heat_sources(
     # Determine which source group to activate
     large_gap_threshold = primary_delta * HEAT_SOURCE_LARGE_GAP_MULTIPLIER
 
+    # Electric preference (e.g. heating from surplus PV): the AC must win over the
+    # boiler regardless of outdoor temperature, and a large gap must not pull the
+    # boiler in as well - the point is that the boiler runs less. Requires a usable
+    # AC: the filtering above drops ACs in extreme cold or without heat support, and
+    # in that case normal selection applies so the room is not left unheated.
+    prefer_electric = bool(room_config.get("prefer_electric_heat", False)) and bool(secondary_devices)
+
     # Weather-based preference with hysteresis (None when no outdoor data available)
     prefer_ac: bool | None
-    if outdoor_temp is not None:
+    if prefer_electric:
+        prefer_ac = True
+    elif outdoor_temp is not None:
         if previous_active_sources == "secondary":
             # AC was active: keep unless outdoor drops below threshold - hysteresis
             prefer_ac = outdoor_temp > outdoor_threshold - HEAT_SOURCE_HYSTERESIS
@@ -180,7 +189,9 @@ def evaluate_heat_sources(
         prefer_ac = None
 
     # "both" when gap is large, or hysteresis holds "both" state
-    if delta_t >= large_gap_threshold + HEAT_SOURCE_HYSTERESIS:
+    if prefer_electric:
+        active = "secondary"
+    elif delta_t >= large_gap_threshold + HEAT_SOURCE_HYSTERESIS:
         active = "both"
     elif previous_active_sources == "both" and delta_t > primary_delta - HEAT_SOURCE_HYSTERESIS:
         active = "both"
@@ -218,7 +229,10 @@ def evaluate_heat_sources(
         reason_parts.append(f"boiler preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
     elif active == "secondary":
         outdoor_str = f"{outdoor_temp}°C" if outdoor_temp is not None else "n/a"
-        reason_parts.append(f"AC preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
+        if prefer_electric:
+            reason_parts.append(f"electric preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
+        else:
+            reason_parts.append(f"AC preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
 
     for eid, device_type in primary_devices:
         is_active = active in ("primary", "both")

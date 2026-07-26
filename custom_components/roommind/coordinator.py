@@ -102,6 +102,7 @@ ROOM_ENTITY_SUFFIXES = (
     "_override",
     "_climate_control",
     "_climate_mode",
+    "_prefer_electric",
     "_cover_auto",
     "_cover_paused",
 )
@@ -1664,9 +1665,14 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             and hasattr(self, "async_add_switch_entities")
             and self.async_add_switch_entities
         ):
-            from .switch import RoomMindClimateControlSwitch
+            from .switch import RoomMindClimateControlSwitch, RoomMindPreferElectricSwitch
 
-            self.async_add_switch_entities([RoomMindClimateControlSwitch(self, area_id)])
+            self.async_add_switch_entities(
+                [
+                    RoomMindClimateControlSwitch(self, area_id),
+                    RoomMindPreferElectricSwitch(self, area_id),
+                ]
+            )
             self._climate_control_switch_areas.add(area_id)
 
         if (
