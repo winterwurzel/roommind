@@ -571,7 +571,7 @@ export class RsRoomDetail extends LitElement {
           ${!this._isOutdoor &&
           this._selectedTempSensor &&
           this._devices.some((d) => d.type === "trv") &&
-          this._devices.some((d) => d.type === "ac")
+          this._devices.some((d) => d.type === "ac" || d.type === "electric")
             ? html`<rs-section-card
                 icon="mdi:swap-horizontal"
                 .heading=${localize("room.section.heat_source", this.hass.language)}
@@ -1127,11 +1127,16 @@ export class RsRoomDetail extends LitElement {
         }),
       );
     } catch (err: unknown) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : localize("room.error_save_fallback", this.hass.language);
-      this._error = message;
+      // hass.callWS rejects with a plain {code, message} object, not an Error, so
+      // an instanceof check alone discards the backend's reason and always shows
+      // the generic fallback.
+      const wsMessage =
+        typeof err === "object" &&
+        err !== null &&
+        typeof (err as { message?: unknown }).message === "string"
+          ? (err as { message: string }).message
+          : "";
+      this._error = wsMessage || localize("room.error_save_fallback", this.hass.language);
       fireSaveStatus(this, "error");
     }
   }

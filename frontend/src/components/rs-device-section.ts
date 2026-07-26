@@ -849,6 +849,11 @@ export class RsDeviceSection extends LitElement {
   private _onClimateToggle(entityId: string, checked: boolean) {
     let newDevices: DeviceConfig[];
     if (checked) {
+      // Never append a device that is already assigned. The backend rejects the
+      // whole save with "duplicate_entity", so if the checkbox and the device
+      // list ever disagree, an unguarded append makes the room unsaveable and
+      // the type the user picked is what gets lost.
+      if (this.devices.some((d) => d.entity_id === entityId)) return;
       const detected = this._detectClimateType(entityId);
       const type: DeviceType = detected === "thermostat" ? "trv" : "ac";
       newDevices = [...this.devices, { entity_id: entityId, type, role: "auto" }];
