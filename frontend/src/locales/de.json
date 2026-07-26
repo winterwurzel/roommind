@@ -172,6 +172,8 @@
   "devices.other_area": "Anderer Bereich",
   "devices.type_thermostat": "Thermostat",
   "devices.type_ac": "Klimagerät",
+  "devices.type_electric": "Elektroheizung",
+  "devices.type_electric_hint": "Widerstandsheizung (z. B. Steckdosenheizer). Wird nur verwendet, solange \"Elektrische Heizung bevorzugen\" aktiv ist, da sich Widerstandsheizung nur bei Überschussstrom lohnt.",
   "devices.type_label": "Typ",
   "devices.select_to_configure": "Gerät zum Konfigurieren auswählen",
   "devices.heating_system_type": "Heizungstyp",

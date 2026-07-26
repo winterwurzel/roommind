@@ -644,9 +644,13 @@ export class RsDeviceSection extends LitElement {
           .options=${[
             { value: "thermostat", label: localize("devices.type_thermostat", lang) },
             { value: "ac", label: localize("devices.type_ac", lang) },
+            { value: "electric", label: localize("devices.type_electric", lang) },
           ]}
           @selected=${(e: Event) =>
-            this._onDeviceTypeChange(entityId, getSelectValue(e) as "thermostat" | "ac")}
+            this._onDeviceTypeChange(
+              entityId,
+              getSelectValue(e) as "thermostat" | "ac" | "electric",
+            )}
           @closed=${(e: Event) => e.stopPropagation()}
           fixedMenuPosition
         >
@@ -654,7 +658,11 @@ export class RsDeviceSection extends LitElement {
             >${localize("devices.type_thermostat", lang)}</ha-list-item
           >
           <ha-list-item value="ac">${localize("devices.type_ac", lang)}</ha-list-item>
+          <ha-list-item value="electric">${localize("devices.type_electric", lang)}</ha-list-item>
         </ha-select>
+        ${device.type === "electric"
+          ? html`<div class="field-hint">${localize("devices.type_electric_hint", lang)}</div>`
+          : nothing}
       </div>
 
       ${isAc
@@ -823,6 +831,7 @@ export class RsDeviceSection extends LitElement {
     const device = this.devices.find((d) => d.entity_id === entityId);
     if (!device) return "thermostat";
     if (device.type === "ac") return "ac";
+    if (device.type === "electric") return "electric";
     return "thermostat";
   }
 
@@ -838,8 +847,9 @@ export class RsDeviceSection extends LitElement {
     this._fireDeviceChanged(newDevices);
   }
 
-  private _onDeviceTypeChange(entityId: string, type: "thermostat" | "ac") {
-    const deviceType: DeviceType = type === "thermostat" ? "trv" : "ac";
+  private _onDeviceTypeChange(entityId: string, type: "thermostat" | "ac" | "electric") {
+    const deviceType: DeviceType =
+      type === "thermostat" ? "trv" : type === "electric" ? "electric" : "ac";
     const newDevices = this.devices.map((d) => {
       if (d.entity_id !== entityId) return d;
       const updated: DeviceConfig = { ...d, type: deviceType };
@@ -847,6 +857,11 @@ export class RsDeviceSection extends LitElement {
       // Reset when switching to AC so the next save does not fail.
       if (deviceType === "ac" && updated.idle_action === "low") {
         updated.idle_action = "off";
+      }
+      // heating_system_type describes a boiler-driven emitter; meaningless for a
+      // resistive heater and only TRV devices feed get_room_heating_system_type.
+      if (deviceType === "electric") {
+        updated.heating_system_type = "";
       }
       return updated;
     });

@@ -33,7 +33,7 @@ from custom_components.roommind.utils.device_utils import (
 
 
 def test_valid_device_types():
-    assert VALID_DEVICE_TYPES == {"trv", "ac"}
+    assert VALID_DEVICE_TYPES == {"trv", "ac", "electric"}
 
 
 def test_device_role_auto_constant():
@@ -656,3 +656,28 @@ class TestRoomContributesToGroup:
     def test_unknown_active_sources_value(self):
         # Fail-safe: unknown orchestration state -> master stays idle.
         assert room_contributes_to_group([self.TRV], {"climate.trv1"}, "invalid") is False
+
+
+def test_electric_maps_to_thermostats_in_legacy():
+    """Electric heaters must land in thermostats, not acs, so AC-only logic
+    (compressor protection, cold-weather cutoff) never applies to them."""
+    from custom_components.roommind.utils.device_utils import devices_to_legacy
+
+    devices = [
+        {"entity_id": "climate.trv", "type": "trv"},
+        {"entity_id": "climate.plug", "type": "electric"},
+        {"entity_id": "climate.ac", "type": "ac"},
+    ]
+    thermostats, acs = devices_to_legacy(devices)
+    assert thermostats == ["climate.trv", "climate.plug"]
+    assert acs == ["climate.ac"]
+
+
+def test_get_electric_eids():
+    from custom_components.roommind.utils.device_utils import get_electric_eids
+
+    devices = [
+        {"entity_id": "climate.trv", "type": "trv"},
+        {"entity_id": "climate.plug", "type": "electric"},
+    ]
+    assert get_electric_eids(devices) == ["climate.plug"]

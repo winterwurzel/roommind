@@ -120,3 +120,80 @@ def test_defaults_off_leaves_behaviour_unchanged():
     del room["prefer_electric_heat"]
     plan = _plan(room, outdoor_temp=5.0)
     assert plan.active_sources == "primary"
+
+
+# --- Rooms with a resistive electric heater and no AC (bathroom / WC shape) ---
+
+ELECTRIC = "climate.plug_heater"
+
+
+def _electric_room(prefer_electric: bool, with_ac: bool = False):
+    """Room shaped like the bathroom: boiler TRV plus a plug heater, no AC."""
+    devices = [
+        {"entity_id": TRV, "type": "trv", "role": "auto", "heating_system_type": "underfloor"},
+        {"entity_id": ELECTRIC, "type": "electric", "role": "auto", "heating_system_type": ""},
+    ]
+    if with_ac:
+        devices.append({"entity_id": AC, "type": "ac", "role": "auto", "heating_system_type": ""})
+    room = _room(prefer_electric)
+    room["devices"] = devices
+    return room
+
+
+def test_electric_room_orchestrates_without_an_ac():
+    """A TRV + electric heater room must orchestrate; previously it bailed on no ACs."""
+    plan = _plan(_electric_room(prefer_electric=True), outdoor_temp=5.0)
+    assert plan is not None
+    assert plan.active_sources == "secondary"
+    assert _active(plan, ELECTRIC) is True
+    assert _active(plan, TRV) is False
+
+
+def test_electric_idle_when_flag_off():
+    """Resistive heat is only worth running on surplus, so it must not be picked on
+    cost heuristics - with the flag off the boiler heats and the heater stays idle."""
+    plan = _plan(_electric_room(prefer_electric=False), outdoor_temp=5.0)
+    assert plan.active_sources == "primary"
+    assert _active(plan, TRV) is True
+    assert _active(plan, ELECTRIC) is False
+
+
+def test_electric_not_escalated_on_large_gap():
+    """Even a large gap must not co-fire the boiler with the plug heater."""
+    plan = _plan(_electric_room(prefer_electric=True), current_temp=17.0, target_temp=21.0)
+    assert plan.active_sources == "secondary"
+    assert _active(plan, ELECTRIC) is True
+    assert _active(plan, TRV) is False
+
+
+def test_electric_survives_extreme_cold():
+    """The AC cold cutoff is compressor protection and must not disable resistive heat."""
+    plan = _plan(_electric_room(prefer_electric=True), outdoor_temp=-20.0)
+    assert plan.active_sources == "secondary"
+    assert _active(plan, ELECTRIC) is True
+
+
+def test_unselected_electric_still_gets_an_idle_command():
+    """Regression: with the flag off the heater must be explicitly commanded off,
+    or it stays on from the previous surplus window with nothing to turn it off."""
+    plan = _plan(_electric_room(prefer_electric=False), outdoor_temp=5.0)
+    cmd = next(c for c in plan.commands if c.entity_id == ELECTRIC)
+    assert cmd.active is False
+    assert cmd.power_fraction == 0.0
+
+
+def test_unselected_electric_gets_idle_command_at_target():
+    """Same, on the delta_t <= 0 early-exit path."""
+    plan = _plan(_electric_room(prefer_electric=False), current_temp=22.0, target_temp=21.0)
+    assert plan.active_sources == "none"
+    cmd = next(c for c in plan.commands if c.entity_id == ELECTRIC)
+    assert cmd.active is False
+
+
+def test_electric_and_ac_both_secondary():
+    """With both electric sources present, both are available to the secondary group."""
+    plan = _plan(_electric_room(prefer_electric=True, with_ac=True), outdoor_temp=5.0)
+    assert plan.active_sources == "secondary"
+    assert _active(plan, ELECTRIC) is True
+    assert _active(plan, AC) is True
+    assert _active(plan, TRV) is False

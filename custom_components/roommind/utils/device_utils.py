@@ -12,7 +12,11 @@ _LOGGER = logging.getLogger(__name__)
 
 DEVICE_TYPE_TRV = "trv"
 DEVICE_TYPE_AC = "ac"
-VALID_DEVICE_TYPES = {DEVICE_TYPE_TRV, DEVICE_TYPE_AC}
+# Resistive electric heater (e.g. a wall plug driven by a thermostat-over-switch).
+# Distinct from TRV because it is not boiler-driven, and distinct from AC because
+# it has no compressor and no cold-weather capability limit.
+DEVICE_TYPE_ELECTRIC = "electric"
+VALID_DEVICE_TYPES = {DEVICE_TYPE_TRV, DEVICE_TYPE_AC, DEVICE_TYPE_ELECTRIC}
 
 DEVICE_ROLE_AUTO = "auto"
 
@@ -89,8 +93,14 @@ def legacy_to_devices(
 def devices_to_legacy(devices: list[dict]) -> tuple[list[str], list[str]]:
     """Extract thermostats/acs lists from devices[].
 
-    TRV -> thermostats, AC -> acs.
+    TRV and ELECTRIC -> thermostats, AC -> acs.
     Devices with unknown types or missing entity_id are logged and skipped.
+
+    Electric heaters map to thermostats rather than acs so that AC-only logic
+    (compressor protection, the cold-weather capability cutoff) never applies to
+    them. The legacy pair is lossy: a round-trip through legacy_to_devices turns
+    an electric device back into a TRV, so downgrade recovery in
+    ensure_room_has_devices will flatten the distinction.
     """
     thermostats: list[str] = []
     acs: list[str] = []
@@ -100,7 +110,7 @@ def devices_to_legacy(devices: list[dict]) -> tuple[list[str], list[str]]:
             _LOGGER.warning("Skipping device with missing entity_id: %s", d)
             continue
         dtype = d.get("type")
-        if dtype == DEVICE_TYPE_TRV:
+        if dtype in (DEVICE_TYPE_TRV, DEVICE_TYPE_ELECTRIC):
             thermostats.append(eid)
         elif dtype == DEVICE_TYPE_AC:
             acs.append(eid)
@@ -192,6 +202,11 @@ def get_trv_eids(devices: list[dict]) -> list[str]:
 def get_ac_eids(devices: list[dict]) -> list[str]:
     """Shortcut for get_entity_ids_by_type(devices, "ac")."""
     return get_entity_ids_by_type(devices, DEVICE_TYPE_AC)
+
+
+def get_electric_eids(devices: list[dict]) -> list[str]:
+    """Shortcut for get_entity_ids_by_type(devices, "electric")."""
+    return get_entity_ids_by_type(devices, DEVICE_TYPE_ELECTRIC)
 
 
 def get_device_by_eid(devices: list[dict], entity_id: str) -> dict | None:

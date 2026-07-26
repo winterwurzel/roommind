@@ -172,6 +172,8 @@
   "devices.other_area": "Autre pièce",
   "devices.type_thermostat": "Thermostat",
   "devices.type_ac": "Appareil climatique",
+  "devices.type_electric": "Chauffage électrique",
+  "devices.type_electric_hint": "Chauffage résistif (par ex. un radiateur sur prise). Utilisé uniquement lorsque « Préférer le chauffage électrique » est actif, car le chauffage résistif ne vaut la peine qu'avec un surplus.",
   "devices.type_label": "Type",
   "devices.select_to_configure": "Sélectionnez un appareil à configurer",
   "devices.heating_system_type": "Type de système de chauffage",

@@ -58,7 +58,7 @@ export interface RoomLiveData {
   compressor_protection_reason: "min_off" | "min_run" | null;
 }
 
-export type DeviceType = "trv" | "ac";
+export type DeviceType = "trv" | "ac" | "electric";
 export type DeviceRole = "primary" | "secondary" | "auto";
 
 export interface DeviceConfig {
