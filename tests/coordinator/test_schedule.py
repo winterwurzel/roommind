@@ -439,6 +439,58 @@ class TestPresenceDetection:
         assert room["target_temp"] == 17.0  # eco_temp
         assert room["force_off"] is False
 
+    @pytest.mark.asyncio
+    async def test_schedule_off_action_off_overrides_fan_only_idle(self, hass, mock_config_entry):
+        """schedule_off_action='off' turns a fan_only AC off instead of running the fan (#368)."""
+        room_cfg = {
+            **SAMPLE_ROOM,
+            "thermostats": [],
+            "acs": ["climate.living_room_ac"],
+            "devices": [
+                {
+                    "entity_id": "climate.living_room_ac",
+                    "type": "ac",
+                    "role": "auto",
+                    "heating_system_type": "",
+                    "idle_action": "fan_only",
+                    "idle_fan_mode": "low",
+                }
+            ],
+        }
+        store = _make_store_mock(
+            {"living_room_abc12345": room_cfg},
+            settings={"schedule_off_action": "off"},
+        )
+        hass.data = {"roommind": {"store": store}}
+
+        ac_state = MagicMock()
+        ac_state.state = "cool"
+        ac_state.attributes = {
+            "hvac_modes": ["off", "cool", "fan_only"],
+            "fan_modes": ["low", "high"],
+            "current_temperature": 23.0,
+            "temperature": 23.0,
+        }
+        base_mock = make_mock_states_get(schedule_state="off")
+
+        def custom_get(eid):
+            if eid == "climate.living_room_ac":
+                return ac_state
+            return base_mock(eid)
+
+        hass.states.get = MagicMock(side_effect=custom_get)
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        data = await coordinator._async_update_data()
+
+        assert data["rooms"]["living_room_abc12345"]["force_off"] is True
+        climate_calls = [c for c in hass.services.async_call.call_args_list if c[0][0] == "climate"]
+        hvac_calls = [c for c in climate_calls if c[0][1] == "set_hvac_mode"]
+        assert any(c[0][2].get("hvac_mode") == "off" for c in hvac_calls)
+        assert not any(c[0][2].get("hvac_mode") == "fan_only" for c in hvac_calls)
+        assert not any(c[0][1] == "set_fan_mode" for c in climate_calls)
+
 
 class TestScheduleServiceFailureRecovery:
     """#308: a transient schedule.get_schedule failure must not silently jump

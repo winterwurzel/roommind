@@ -27,7 +27,7 @@ from ..control.solar import (
     surface_irradiance_factor,
 )
 from ..utils.schedule_utils import resolve_schedule_index
-from .cover_manager import CoverDecision, CoverManager, compute_shading_factor
+from .cover_manager import _SUPPORT_SET_POSITION, CoverDecision, CoverManager, compute_shading_factor
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -264,13 +264,22 @@ class CoverOrchestrator:
                 cover_decision.target_position,
                 cover_min_positions=_cover_min_positions or None,
             )
-            if _cover_min_positions:
-                effective_positions = [
-                    max(_cover_min_positions.get(eid, 0), cover_decision.target_position) for eid in cover_eids
-                ]
-                if effective_positions:
-                    avg = int(sum(effective_positions) / len(effective_positions))
-                    self._cover_manager.set_commanded_position(area_id, avg)
+            expected_positions: list[int] = []
+            for eid in cover_eids:
+                cstate = self.hass.states.get(eid)
+                if cstate is None:
+                    continue
+                supported = cstate.attributes.get("supported_features", 0) or 0
+                if supported & _SUPPORT_SET_POSITION:
+                    expected_positions.append(max(_cover_min_positions.get(eid, 0), cover_decision.target_position))
+                elif cover_decision.target_position < 100:
+                    expected_positions.append(0)
+                else:
+                    expected_positions.append(100)
+            if expected_positions:
+                self._cover_manager.set_commanded_position(
+                    area_id, int(sum(expected_positions) / len(expected_positions))
+                )
 
         return CoverResult(
             forced_reason=_forced_reason if _forced_position is not None else "",
@@ -372,6 +381,14 @@ class CoverOrchestrator:
     def is_user_override_active(self, area_id: str) -> bool:
         """Delegate to CoverManager.is_user_override_active."""
         return self._cover_manager.is_user_override_active(area_id)
+
+    def get_user_override_until(self, area_id: str) -> float | None:
+        """Delegate to CoverManager.get_user_override_until."""
+        return self._cover_manager.get_user_override_until(area_id)
+
+    def clear_user_override(self, area_id: str) -> None:
+        """Delegate to CoverManager.clear_user_override."""
+        self._cover_manager.clear_user_override(area_id)
 
     def remove_room(self, area_id: str) -> None:
         """Delegate to CoverManager.remove_room."""

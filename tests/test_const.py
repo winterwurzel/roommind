@@ -14,27 +14,35 @@ from custom_components.roommind.const import (
 class TestIsOverrideActive:
     """Unit tests for is_override_active."""
 
-    def test_no_override_temp(self):
-        """No override_temp → inactive."""
+    def test_no_override_fields(self):
+        """No override fields → inactive."""
         assert is_override_active({}) is False
 
-    def test_override_temp_none(self):
-        """override_temp=None → inactive."""
-        assert is_override_active({"override_temp": None}) is False
+    def test_both_targets_none(self):
+        """override_heat=None and override_cool=None → inactive."""
+        assert is_override_active({"override_heat": None, "override_cool": None}) is False
+
+    def test_heat_only_active(self):
+        """Only override_heat set → active."""
+        assert is_override_active({"override_heat": 21.0, "override_cool": None}) is True
+
+    def test_cool_only_active(self):
+        """Only override_cool set → active."""
+        assert is_override_active({"override_heat": None, "override_cool": 24.0}) is True
 
     def test_permanent_override(self):
-        """override_temp set, override_until=None → permanent, active."""
-        assert is_override_active({"override_temp": 20.0, "override_until": None}) is True
+        """Targets set, override_until=None → permanent, active."""
+        assert is_override_active({"override_heat": 20.0, "override_cool": 24.0, "override_until": None}) is True
 
     def test_future_override(self):
         """override_until in the future → active."""
         future = time.time() + 3600
-        assert is_override_active({"override_temp": 20.0, "override_until": future}) is True
+        assert is_override_active({"override_heat": 20.0, "override_cool": 24.0, "override_until": future}) is True
 
     def test_expired_override(self):
         """override_until in the past → inactive."""
         past = time.time() - 3600
-        assert is_override_active({"override_temp": 20.0, "override_until": past}) is False
+        assert is_override_active({"override_heat": 20.0, "override_until": past}) is False
 
 
 class TestIsOverrideSuppressed:
@@ -66,14 +74,14 @@ class TestBuildOverrideLive:
         assert result["override_suppressed"] is False
 
     def test_active_override_not_suppressed(self):
-        room = {"override_temp": 22.0, "override_until": None, "override_type": "boost"}
+        room = {"override_heat": 22.0, "override_cool": 25.0, "override_until": None, "override_type": "boost"}
         result = build_override_live(room, suppressed=False)
         assert result["override_active"] is True
         assert result["override_type"] == "boost"
         assert result["override_suppressed"] is False
 
     def test_active_override_suppressed(self):
-        room = {"override_temp": 22.0, "override_until": None, "override_type": "boost"}
+        room = {"override_heat": 22.0, "override_cool": 25.0, "override_until": None, "override_type": "boost"}
         result = build_override_live(room, suppressed=True)
         assert result["override_active"] is True
         assert result["override_suppressed"] is True
@@ -83,3 +91,17 @@ class TestBuildOverrideLive:
         result = build_override_live({}, suppressed=True)
         assert result["override_active"] is False
         assert result["override_suppressed"] is False
+
+    def test_exposes_split_targets(self):
+        room = {"override_type": "custom", "override_heat": 21.0, "override_cool": 24.0, "override_until": None}
+        live = build_override_live(room)
+        assert live["override_active"] is True
+        assert live["override_heat"] == 21.0
+        assert live["override_cool"] == 24.0
+        assert "override_temp" not in live
+
+    def test_inactive_nulls_targets(self):
+        live = build_override_live({"override_heat": None, "override_cool": None})
+        assert live["override_active"] is False
+        assert live["override_heat"] is None
+        assert live["override_cool"] is None

@@ -293,6 +293,11 @@ class TestHeatSourceOrchestration:
 
         # Mode should be idle because the only device is blocked by min-off
         assert room_state["mode"] == MODE_IDLE
+        # UI-visible compressor protection status (#compressor-protection-visibility):
+        # must report min_off even though the room was fully idled (which
+        # clears the internal forced_off set after resolving mode).
+        assert room_state["compressor_protection_active"] is True
+        assert room_state["compressor_protection_reason"] == "min_off"
 
     @pytest.mark.asyncio
     async def test_compressor_min_run_keeps_ac_on(self, hass, mock_config_entry):
@@ -337,11 +342,14 @@ class TestHeatSourceOrchestration:
         coordinator._compressor_manager.update_member("climate.living_room_ac", True)
         # compressor_on_since is now ~monotonic(), so min-run (15 min) not expired
 
-        await coordinator._async_update_data()
+        data = await coordinator._async_update_data()
+        room_state = data["rooms"]["living_room_abc12345"]
 
         # The compressor manager should have forced the AC to stay on
         # Verify the AC was NOT turned off (check_must_stay_active returns True)
         assert coordinator._compressor_manager.check_must_stay_active("climate.living_room_ac") is True
+        assert room_state["compressor_protection_active"] is True
+        assert room_state["compressor_protection_reason"] == "min_run"
 
     @pytest.mark.asyncio
     async def test_compressor_window_open_overrides_min_run(self, hass, mock_config_entry):
@@ -391,6 +399,10 @@ class TestHeatSourceOrchestration:
         # Window open forces idle regardless of compressor protection
         assert room_state["mode"] == MODE_IDLE
         assert room_state["window_open"] is True
+        # Window-open short-circuits the compressor-group block entirely, so
+        # this idle must NOT be misreported as compressor protection.
+        assert room_state["compressor_protection_active"] is False
+        assert room_state["compressor_protection_reason"] is None
 
     @pytest.mark.asyncio
     async def test_compressor_cross_room(self, hass, mock_config_entry):
@@ -457,3 +469,66 @@ class TestHeatSourceOrchestration:
         # Deactivate last member, compressor stops
         coordinator._compressor_manager.update_member("climate.ac_b", False)
         assert coordinator._compressor_manager.is_compressor_running("shared_outdoor") is False
+
+    @pytest.mark.asyncio
+    async def test_compressor_min_off_blocks_ac_in_cool_only_room_with_trv(self, hass, mock_config_entry):
+        """Compressor protection sets mode to IDLE in a cool_only room that also has a TRV.
+
+        Regression test: before the fix, the TRV's presence in all_device_eids caused
+        the 'all grouped devices blocked' check to never trigger, leaving mode as
+        'cooling' even though the only cooling-capable device was protected.
+        """
+        mixed_room = {
+            **SAMPLE_ROOM,
+            "thermostats": ["climate.living_room_trv"],
+            "acs": ["climate.living_room_ac"],
+            "devices": [
+                {
+                    "entity_id": "climate.living_room_trv",
+                    "type": "trv",
+                    "role": "auto",
+                    "heating_system_type": "radiator",
+                },
+                {
+                    "entity_id": "climate.living_room_ac",
+                    "type": "ac",
+                    "role": "auto",
+                    "heating_system_type": "",
+                    "idle_action": "fan_only",
+                },
+            ],
+            "climate_mode": "cool_only",
+        }
+        store = _make_store_mock({"living_room_abc12345": mixed_room})
+        store.get_settings.return_value = {
+            "compressor_groups": [
+                {
+                    "id": "group1",
+                    "name": "Outdoor Unit",
+                    "members": ["climate.living_room_ac"],
+                    "min_run_minutes": 5,
+                    "min_off_minutes": 5,
+                }
+            ],
+        }
+        hass.data = {"roommind": {"store": store}}
+
+        # Room is warm so coordinator wants to cool (temp=28, comfort_cool=24)
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(temp="28.0"))
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        # Simulate AC recently deactivated — min-off not yet expired
+        coordinator._compressor_manager.load_groups(store.get_settings()["compressor_groups"])
+        coordinator._compressor_manager.update_member("climate.living_room_ac", True)
+        coordinator._compressor_manager.update_member("climate.living_room_ac", False)
+
+        data = await coordinator._async_update_data()
+        room_state = data["rooms"]["living_room_abc12345"]
+
+        # The AC is the only cooling-capable device and it is blocked: mode must be IDLE.
+        # A TRV in the room must not prevent this transition (TRVs cannot cool).
+        assert room_state["mode"] == MODE_IDLE, (
+            "cool_only room with blocked AC should be IDLE even when a TRV is present"
+        )

@@ -373,7 +373,8 @@ class TestCoverIntegration:
         await real_store.async_update_room(
             "living_room",
             {
-                "override_temp": 25.0,
+                "override_heat": 25.0,
+                "override_cool": 25.0,
                 "override_until": _time.time() + 3600,
                 "override_type": "boost",
             },

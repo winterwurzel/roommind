@@ -7,11 +7,9 @@
   "panel.loading": "Chargement...",
   "panel.no_areas": "Aucune pièce configurée dans Home Assistant.",
   "panel.no_areas_hint": "Ajoutez des pièces dans les réglages HA pour commencer.",
-
   "badge.beta": "Bêta",
   "badge.beta_hint": "Cette fonctionnalité est en version bêta et est susceptible d'être modifiée ou restructurée lors de futures mises à jour.",
   "common.learn_more": "En savoir plus",
-
   "panel.stat.rooms": "Pièces",
   "panel.stat.heating": "Chauffage",
   "panel.stat.cooling": "Refroidissement",
@@ -24,7 +22,6 @@
   "panel.floor_other": "Autre",
   "panel.reorder": "Réorganiser les pièces",
   "panel.reorder_done": "Terminé",
-
   "room.back": "Retour aux pièces",
   "room.section.climate_mode": "Mode climatique",
   "room.section.schedule": "Planification et températures",
@@ -51,21 +48,22 @@
   "room.error_save_fallback": "Échec de l'enregistrement de la configuration",
   "room.error_delete_fallback": "Échec de la suppression de la configuration",
   "room.climate_control_toggle": "Contrôle climatique",
-  "room.climate_control_hint": "Si désactivé, RoomMind ne contrôlera pas les appareils de cette pièce",
+  "room.climate_control_hint": "Si désactivé, RoomMind ne contrôle plus les appareils de cette pièce. Ils conservent leurs réglages actuels et peuvent continuer à chauffer ou refroidir d'eux-mêmes. RoomMind ne les éteint pas.",
   "room.outdoor_toggle": "Zone extérieure",
   "room.outdoor_hint": "Désactive le contrôle climatique, la détection de moisissures et l'entraînement du modèle. La surveillance des capteurs se poursuit.",
   "room.alias.placeholder": "Nom d'affichage personnalisé",
   "room.alias.clear": "Revenir au nom de la pièce",
-
   "override.label": "Dérogation temporaire",
   "override.comfort": "Confort",
   "override.eco": "Éco",
   "override.custom": "Personnalisé",
   "override.target": "Cible:",
+  "override.heat_to": "Chauffer jusqu'à:",
+  "override.cool_above": "Refroidir au-dessus de:",
+  "override.invalid_band": "La cible de refroidissement doit être supérieure ou égale à la cible de chauffage",
   "override.activate_for": "Activer pendant:",
   "override.error_set": "Échec lors de la configuration de la dérogation",
   "override.error_clear": "Échec lors de la suppression de la dérogation",
-
   "hero.target": "Cible",
   "hero.override": "Dérogation",
   "hero.remaining": "{time} restant",
@@ -79,7 +77,9 @@
   "hero.not_configured": "Pas encore configuré",
   "hero.mpc_learning_paused": "Apprentissage du MPC en pause",
   "hero.mpc_learning_paused.outdoor_unavailable": "RoomMind a besoin d'une température extérieure pour apprendre le modèle thermique de cette pièce. Le capteur extérieur configuré n'est pas disponible et aucune entité météo n'est définie comme solution de secours. Configurez l'un ou l'autre dans les Paramètres.",
-
+  "hero.compressor_protection_min_off": "Protection du compresseur : attente du délai minimal d'arrêt",
+  "hero.compressor_protection_min_run": "Protection du compresseur : durée minimale de fonctionnement active",
+  "hero.compressor_protection_info": "Cette pièce partage une unité extérieure (compresseur) avec d'autres pièces. Pour éviter les cycles courts, le groupe de compresseurs impose une durée minimale de fonctionnement et un délai minimal d'arrêt avant que cet appareil ne puisse à nouveau changer d'état.",
   "card.target": "Cible",
   "card.waiting": "En attente de données...",
   "card.humidity": "{value}% humidité",
@@ -97,7 +97,6 @@
   "card.mpc_active": "MPC actif",
   "card.mpc_learning": "MPC en apprentissage",
   "card.not_controlled": "Pas contrôlé par RoomMind",
-
   "mode.auto": "Auto",
   "mode.auto_desc": "Chauffe et refroidit automatiquement en fonction de la température cible",
   "mode.heat_only": "Chauffer seulement",
@@ -107,7 +106,6 @@
   "mode.heating": "Chauffage",
   "mode.cooling": "Refroidissement",
   "mode.idle": "En veille",
-
   "schedule.add_schedule": "Ajouter une planification",
   "schedule.select_schedule": "Sélectionnez la planification",
   "schedule.create_helper_hint": "Créer une nouvelle planification dans les réglages HA",
@@ -130,10 +128,10 @@
   "schedule.help_header": "Comment fonctionnent les planifications ?",
   "schedule.help_temps_title": "Comment la température cible est-elle déterminée ?",
   "schedule.help_temps": "La température cible suit cette chaîne de priorité:",
-  "schedule.help_temps_1": "<strong>Dérogation manuelle</strong> \u2013 Une dérogation confort/éco/personnalisée a toujours la priorité la plus élevée.",
-  "schedule.help_temps_2": "<strong>Température du bloc</strong> \u2013 Si le bloc de planification actif possède une valeur <code>temperature</code> dans ses données, cette valeur est utilisée.",
-  "schedule.help_temps_3": "<strong>Température de confort</strong> \u2013 Si la planification est \"activée\" mais que le bloc n'a pas de température, la température de secours de confort ci-dessous est utilisée.",
-  "schedule.help_temps_4": "<strong>Température éco</strong> \u2013 Lorsque la planification est \"désactivée\" (en dehors de tous les blocs temporels), la température éco est utilisée.",
+  "schedule.help_temps_1": "<strong>Dérogation manuelle</strong> – Une dérogation confort/éco/personnalisée a toujours la priorité la plus élevée.",
+  "schedule.help_temps_2": "<strong>Température du bloc</strong> – Si le bloc de planification actif possède une valeur <code>temperature</code> dans ses données, cette valeur est utilisée.",
+  "schedule.help_temps_3": "<strong>Température de confort</strong> – Si la planification est \"activée\" mais que le bloc n'a pas de température, la température de secours de confort ci-dessous est utilisée.",
+  "schedule.help_temps_4": "<strong>Température éco</strong> – Lorsque la planification est \"désactivée\" (en dehors de tous les blocs temporels), la température éco est utilisée.",
   "schedule.help_block_title": "Définir la température par bloc horaire",
   "schedule.help_block": "Vous pouvez définir une température spécifique pour chaque bloc horaire en ajoutant une valeur <code>temperature</code> dans la configuration YAML de la planification:",
   "schedule.help_block_note": "Si un bloc n'a pas de donnée <code>temperature</code>, la température de secours de confort est utilisée à la place.",
@@ -156,7 +154,6 @@
   "schedule.from_schedule_split": "{heat}{unit} / {cool}{unit} provenant de la planification",
   "schedule.fallback": "{temp}{unit} (secours)",
   "schedule.eco_detail": "{temp}{unit} (éco)",
-
   "devices.climate_entities": "Entités climatiques",
   "devices.temp_sensors": "Capteurs de température",
   "devices.humidity_sensors": "Capteurs d'humidité",
@@ -206,10 +203,8 @@
   "devices.info.modes_body": "Lorsque inactif ne s'applique qu'aux appareils climatiques. Éteindre met l'appareil hors tension. Ventilateur uniquement maintient le débit d'air sans chauffage ni refroidissement. Décalage garde le mode actuel actif mais décale la cible de 2°C par rapport à la cible de la pièce. Ce décalage de réduction est actuellement fixe. Pour les thermostats, Consigne basse garde le TRV actif à sa consigne minimale au lieu de l'éteindre, utile pour les TRV Zigbee à batterie qui se mettent en veille lorsqu'ils sont à off.",
   "devices.info.heat_source_title": "Sélection intelligente de source",
   "devices.info.heat_source_body": "Cela apparaît uniquement lorsqu'une pièce possède à la fois un thermostat/TRV et un appareil climatique ainsi qu'un capteur de température externe. RoomMind peut alors choisir la source qui gérera le chauffage en fonction de l'écart de température et des conditions extérieures.",
-
   "hero.window_open": "Fenêtre ouverte - en pause",
   "card.window_open": "Fenêtre ouverte",
-
   "room.section.covers": "Rideaux & stores",
   "covers.section_title": "Rideaux & stores",
   "covers.auto_control": "Contrôle automatique des stores",
@@ -225,6 +220,8 @@
   "covers.add_cover": "Ajouter une entité de store...",
   "covers.shading_active": "Ombrage activé",
   "covers.auto_paused": "Pause auto (dérogation manuelle)",
+  "covers.auto_paused_until": "Contrôle automatique en pause jusqu'à",
+  "covers.resume_auto": "Reprendre le contrôle automatique",
   "covers.done": "Terminé",
   "covers.night_close": "Fermer la nuit",
   "covers.night_close_hint": "Ferme automatiquement les stores au coucher du soleil et les ouvre au lever du soleil.",
@@ -296,11 +293,10 @@
   "covers.orientation_SW_full": "Sud-Ouest",
   "covers.orientation_W_full": "Ouest",
   "covers.orientation_NW_full": "Nord-Ouest",
-
   "settings.general_title": "Général",
   "settings.group_by_floor": "Regrouper les pièces par étage",
   "settings.climate_control_active": "Contrôle climatique actif",
-  "settings.climate_control_hint": "Lorsqu'il est désactivé, RoomMind continue de surveiller tous les capteurs et d'entraîner le modèle, mais n'enverra aucune commande à vos appareils de chauffage ou de refroidissement.",
+  "settings.climate_control_hint": "Lorsqu'il est désactivé, RoomMind continue de surveiller tous les capteurs et d'entraîner le modèle, mais n'envoie aucune commande à vos appareils de chauffage ou de refroidissement. Vos appareils conservent leur mode et leur consigne actuels et peuvent continuer à chauffer ou refroidir d'eux-mêmes. RoomMind ne les éteint pas.",
   "settings.learning_title": "Entraînement du modèle",
   "settings.learning_hint": "Lorsqu'il est en pause, RoomMind cesse de collecter de nouvelles mesures et d'entraîner le modèle thermique. Les données du modèle existant sont conservées.",
   "settings.learning_exceptions": "Exceptions",
@@ -324,9 +320,7 @@
   "settings.saving": "Enregistrement...",
   "settings.saved": "Enregistré",
   "settings.error": "Erreur lors de l'enregistrement",
-
   "devices.using_builtin_sensor": "Utilisation du capteur intégré du thermostat",
-
   "settings.climate_intelligence": "Intelligence climatique",
   "settings.control_mode": "Mode de contrôle",
   "settings.control_mode_simple": "Simple (Bang-Bang)",
@@ -342,7 +336,6 @@
   "settings.outdoor_unavailable_notify_hint": "Afficher une notification Home Assistant lorsqu'aucun des capteurs extérieurs ni l'entité météo n'a signalé de température pendant 30 minutes. Pendant ce temps, RoomMind met en pause l'apprentissage du modèle thermique pour éviter la corruption.",
   "settings.prediction_enabled": "Prédiction de température",
   "settings.prediction_enabled_hint": "Afficher la tendance de température prédite dans les graphiques d'analyse. A désactiver si vous constatez de mauvaises performances.",
-
   "vacation.title": "Mode vacances",
   "vacation.hint": "Règle toutes les pièces sur une température réduite jusqu'à la date de fin.",
   "vacation.active_label": "Mode vacances actif",
@@ -350,7 +343,6 @@
   "vacation.setback_temp": "Température de réduction",
   "vacation.no_end_date": "Pas de date de fin",
   "vacation.deactivate": "Désactiver",
-
   "tabs.analytics": "Analyses",
   "analytics.select_room": "Sélectionner une pièce",
   "analytics.temperature": "Température",
@@ -424,7 +416,6 @@
   "analytics.range_from": "De",
   "analytics.range_to": "À",
   "analytics.chart_info_body": "**Lignes:** La ligne orange solide montre la température mesurée de la pièce. La ligne verte en pointillé représente la température cible de votre planning. La ligne bleue pointillée est la prédiction de température du modèle.\n\n**Zones colorées:** Le rouge indique les périodes de chauffage, le bleu les périodes de refroidissement, et le turquoise les moments où une fenêtre était ouverte.\n\n**Prévision future (à droite de la ligne « now »)** : La ligne verte en pointillé montre les objectifs de planning à venir pour les 3 prochaines heures. La ligne bleue pointillée montre la tendance de température prévue.\n\n**Modes de prédiction :** Lorsque « MPC actif » est affiché, la prédiction utilise l'optimiseur complet MPC avec pré-chauffage/pré-refroidissement intelligent. Tant que le modèle apprend encore, une simulation plus simple est utilisée.\n\n**Limites :** La prédiction suppose que les conditions actuelles restent constantes (température extérieure, état des fenêtres). La précision de la simulation dépend de la qualité d'apprentissage du modèle thermique de votre pièce — au début, les prédictions peuvent être moins précises. Une fois le MPC activé, les prédictions deviennent nettement plus fiables.",
-
   "presence.title": "Détection de présence",
   "presence.hint": "Utilise la température éco lorsque personne n'est présent.",
   "presence.hint_detail": "Lorsque activé, toutes les pièces passent à la température éco dès qu'aucune des personnes configurées n'est à la maison. Vous pouvez éventuellement restreindre, par pièce, quelles personnes sont prises en compte.",
@@ -448,13 +439,11 @@
   "presence.clears_override_label": "L'absence annule la dérogation",
   "presence.clears_override_hint": "Lorsque personne n'est à la maison, les dérogations manuelles sont suspendues et la pièce suit l'action d'absence. Quand quelqu'un revient, la dérogation reprend jusqu'à son expiration.",
   "card.presence_away": "Absent",
-
   "valve_protection.title": "Protection des vannes",
   "valve_protection.hint": "Ouvre périodiquement et brièvement les vannes TRV inactives pour éviter le blocage ou la calcification.",
   "valve_protection.interval_label": "Intervalle du cycle",
   "valve_protection.interval_suffix": "jours",
   "valve_protection.interval_hint": "Durée pendant laquelle une valve peut rester inactive avant d'être cyclée (1-90 jours)",
-
   "compressor.title": "Protection du compresseur",
   "compressor.no_groups": "Aucun groupe de compresseurs configuré.",
   "compressor.add_group": "Ajouter un groupe de compresseur",
@@ -481,7 +470,6 @@
   "compressor.action_script_hint": "Un script Home Assistant qui s'exécute chaque fois que la demande de chauffage/refroidissement change. Utile pour les systèmes nécessitant des commandes spécifiques, par ex. annuler un Vaillant Quick Veto ou basculer un relais. Fonctionne avec ou sans appareil maître. Sans appareil maître, seul le script est déclenché. Reçoit les variables : action (heat/cool/idle), master_entity, members, active_members.",
   "compressor.enforce_uniform_mode": "Imposer un mode uniforme",
   "compressor.enforce_uniform_mode_hint": "Tous les thermostats de ce groupe doivent fonctionner dans le même mode HVAC (tout chauffage ou tout refroidissement). Les pièces qui ne sont pas d'accord avec le mode de groupe résolu seront mises en mode repos. Utilisez cela pour les pompes à chaleur qui démarrent automatiquement mais exigent que toutes les unités connectées fonctionnent dans le même mode.",
-
   "mold.title": "Protection contre le risque de moisissure",
   "mold.detection": "Détection de moisissure",
   "mold.detection_desc": "Recevoir des notifications lorsque l'humidité indique un risque de moisissure",
@@ -500,7 +488,6 @@
   "card.mold_critical": "Danger de moisissure !",
   "card.mold_prevention": "Prévention de la moisissure +{delta}{unit}",
   "room.mold_surface_rh": "Humidité de surface estimée : {value}%",
-
   "settings.intro.general": "Paramètres d'affichage et de contrôle de base.",
   "settings.intro.sensors": "Configurez les capteurs extérieurs et les données météo pour un contrôle climatique précis.",
   "settings.intro.control": "Choisissez comment RoomMind contrôle vos appareils climatiques et définissez les priorités et seuils.",
@@ -512,7 +499,6 @@
   "settings.intro.notifications": "Configurez qui reçoit les alertes et comment.",
   "settings.intro.learning": "Gérez l'entraînement du modèle thermique et accélérez le réapprentissage après des changements.",
   "settings.intro.reset": "Effacez les données du modèle thermique appris. Le modèle recommencera à apprendre à partir de zéro.",
-
   "notifications.title": "Notifications",
   "notifications.enabled": "Activer les notifications",
   "notifications.enabled_hint": "Lorsqu'elles sont désactivées, aucune notification n'est envoyée — ni aux appareils, ni à la barre latérale HA.",
@@ -527,7 +513,6 @@
   "notifications.cooldown_hint": "Temps minimum entre des alertes répétées par pièce",
   "notifications.mold_prevention_notify": "Notifier lorsque la prévention de moisissure s'active",
   "notifications.mold_prevention_notify_hint": "Envoyer également une notification lorsque la prévention s'active (température augmentée)",
-
   "room.section.heat_source": "Orchestration de la source de chaleur",
   "heat_source.toggle": "Sélection intelligente de la source",
   "heat_source.toggle_hint": "Lorsque cette pièce possède à la fois des thermostats de radiateur et une climatisation/pompe à chaleur, RoomMind oriente intelligemment la demande de chauffage vers l'appareil le plus efficace en fonction de l'écart de température et des conditions extérieures.",

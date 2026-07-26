@@ -255,10 +255,13 @@ async def websocket_list_rooms(
             "n_observations": live.get("n_observations", 0),
             "blind_position": live.get("blind_position"),
             "cover_auto_paused": live.get("cover_auto_paused", False),
+            "cover_override_until": live.get("cover_override_until"),
             "cover_forced_reason": live.get("cover_forced_reason", ""),
             "active_cover_schedule_index": live.get("active_cover_schedule_index", -1),
             "active_heat_sources": live.get("active_heat_sources"),
             "learning_paused_reason": learning_paused_reason,
+            "compressor_protection_active": live.get("compressor_protection_active", False),
+            "compressor_protection_reason": live.get("compressor_protection_reason"),
         }
         result[area_id] = room_data
 
@@ -455,7 +458,8 @@ async def websocket_delete_room(
         vol.Required("type"): "roommind/override/set",
         vol.Required("area_id"): str,
         vol.Required("override_type"): vol.In(OVERRIDE_TYPES),
-        vol.Optional("temperature"): vol.Coerce(float),
+        vol.Optional("heat"): vol.Coerce(float),
+        vol.Optional("cool"): vol.Coerce(float),
         vol.Optional("duration"): vol.Coerce(float),  # hours (omit or 0 for permanent)
     }
 )
@@ -476,31 +480,37 @@ async def websocket_override_set(
         connection.send_error(msg["id"], "not_found", f"Room '{area_id}' not found")
         return
 
-    # Resolve override temperature
+    climate_mode = room.get("climate_mode", "auto")
+
     if override_type == "boost":
-        climate_mode = room.get("climate_mode", "auto")
-        if climate_mode == "cool_only":
-            override_temp = room.get("comfort_cool", DEFAULT_COMFORT_COOL)
-        else:
-            override_temp = room.get("comfort_heat", room.get("comfort_temp", DEFAULT_COMFORT_HEAT))
+        heat = room.get("comfort_heat", room.get("comfort_temp", DEFAULT_COMFORT_HEAT))
+        cool = room.get("comfort_cool", DEFAULT_COMFORT_COOL)
     elif override_type == "eco":
-        climate_mode = room.get("climate_mode", "auto")
-        if climate_mode == "cool_only":
-            override_temp = room.get("eco_cool", DEFAULT_ECO_COOL)
-        else:
-            override_temp = room.get("eco_heat", room.get("eco_temp", DEFAULT_ECO_HEAT))
+        heat = room.get("eco_heat", room.get("eco_temp", DEFAULT_ECO_HEAT))
+        cool = room.get("eco_cool", DEFAULT_ECO_COOL)
     else:  # custom
-        override_temp = msg.get("temperature")
-        if override_temp is None:
-            connection.send_error(msg["id"], "invalid", "Custom override requires temperature")
+        heat = msg.get("heat")
+        cool = msg.get("cool")
+        if heat is None and cool is None:
+            connection.send_error(msg["id"], "invalid", "Custom override requires heat and/or cool")
             return
+
+    if climate_mode == "heat_only":
+        cool = None
+    elif climate_mode == "cool_only":
+        heat = None
+
+    if heat is not None and cool is not None and cool < heat:
+        connection.send_error(msg["id"], "invalid", "Cooling target must be >= heating target")
+        return
 
     override_until = (time.time() + duration_hours * 3600) if duration_hours else None
 
     await store.async_update_room(
         area_id,
         {
-            "override_temp": override_temp,
+            "override_heat": heat,
+            "override_cool": cool,
             "override_until": override_until,
             "override_type": override_type,
         },
@@ -542,7 +552,8 @@ async def websocket_override_clear(
     await store.async_update_room(
         area_id,
         {
-            "override_temp": None,
+            "override_heat": None,
+            "override_cool": None,
             "override_until": None,
             "override_type": None,
         },
@@ -897,6 +908,38 @@ async def websocket_get_diagnostics(
 
 
 # ---------------------------------------------------------------------------
+# Clear cover user override
+# ---------------------------------------------------------------------------
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "roommind/covers/clear_override",
+        vol.Required("area_id"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_covers_clear_override(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict,
+) -> None:
+    """Clear a user cover override so automatic cover control resumes."""
+    store = hass.data[DOMAIN]["store"]
+    area_id = msg["area_id"]
+    if store.get_room(area_id) is None:
+        connection.send_error(msg["id"], "not_found", f"Room '{area_id}' not found")
+        return
+
+    coordinator = _get_coordinator(hass)
+    if coordinator:
+        coordinator.clear_cover_override(area_id)
+        await coordinator.async_request_refresh()
+
+    connection.send_result(msg["id"], {"success": True})
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -916,3 +959,4 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_thermal_reset_all)
     websocket_api.async_register_command(hass, websocket_boost_learning)
     websocket_api.async_register_command(hass, websocket_get_diagnostics)
+    websocket_api.async_register_command(hass, websocket_covers_clear_override)

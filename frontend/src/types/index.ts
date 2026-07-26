@@ -34,7 +34,8 @@ export interface RoomLiveData {
   device_setpoint: number | null; // Device target temp in Full Control mode
   override_active: boolean;
   override_type: OverrideType | null;
-  override_temp: number | null;
+  override_heat: number | null;
+  override_cool: number | null;
   override_until: number | null;
   override_suppressed: boolean;
   active_schedule_index: number;
@@ -48,10 +49,13 @@ export interface RoomLiveData {
   mold_prevention_delta: number;
   blind_position: number | null;
   cover_auto_paused: boolean;
+  cover_override_until?: number | null;
   cover_forced_reason: string;
   active_cover_schedule_index: number;
   active_heat_sources: string | null;
   learning_paused_reason: "outdoor_unavailable" | null;
+  compressor_protection_active: boolean;
+  compressor_protection_reason: "min_off" | "min_run" | null;
 }
 
 export type DeviceType = "trv" | "ac";
@@ -105,7 +109,8 @@ export interface RoomConfig {
   comfort_cool: number;
   eco_heat: number;
   eco_cool: number;
-  override_temp?: number | null;
+  override_heat?: number | null;
+  override_cool?: number | null;
   override_until?: number | null;
   override_type?: OverrideType | null;
   presence_persons?: string[];

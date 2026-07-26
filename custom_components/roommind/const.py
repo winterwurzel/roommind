@@ -7,7 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import Context
 
 DOMAIN = "roommind"
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 
 # Platforms
 PLATFORMS = [
@@ -194,8 +194,7 @@ VACATION_SENTINEL_UNTIL = 32503680000.0
 
 def is_override_active(room: dict) -> bool:
     """Return True when a manual override is currently active."""
-    override_temp = room.get("override_temp")
-    if override_temp is None:
+    if room.get("override_heat") is None and room.get("override_cool") is None:
         return False
     override_until = room.get("override_until")
     return override_until is None or time.time() < override_until
@@ -219,12 +218,11 @@ def build_override_live(room: dict, suppressed: bool = False) -> dict:
     "paused" indicator.
     """
     active = is_override_active(room)
-    override_temp = room.get("override_temp")
-    override_until = room.get("override_until")
     return {
         "override_active": active,
         "override_type": room.get("override_type") if active else None,
-        "override_temp": override_temp if active else None,
-        "override_until": override_until if active else None,
+        "override_heat": room.get("override_heat") if active else None,
+        "override_cool": room.get("override_cool") if active else None,
+        "override_until": room.get("override_until") if active else None,
         "override_suppressed": active and suppressed,
     }

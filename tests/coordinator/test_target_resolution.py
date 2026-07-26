@@ -23,7 +23,8 @@ class TestRoomMindCoordinator:
         """Test that an active override overrides the schedule target temp."""
         room_with_override = {
             **SAMPLE_ROOM,
-            "override_temp": 25.0,
+            "override_heat": 25.0,
+            "override_cool": 25.0,
             "override_until": time.time() + 3600,
             "override_type": "boost",
         }
@@ -46,7 +47,8 @@ class TestRoomMindCoordinator:
         """Test that an expired override reverts to normal schedule logic."""
         room_with_expired = {
             **SAMPLE_ROOM,
-            "override_temp": 25.0,
+            "override_heat": 25.0,
+            "override_cool": 25.0,
             "override_until": time.time() - 10,
             "override_type": "boost",
         }
@@ -70,7 +72,8 @@ class TestRoomMindCoordinator:
         """Permanent override (override_until=None) takes priority over schedule."""
         room_with_override = {
             **SAMPLE_ROOM,
-            "override_temp": 23.0,
+            "override_heat": 23.0,
+            "override_cool": 23.0,
             "override_until": None,
             "override_type": "custom",
         }
@@ -116,7 +119,8 @@ class TestVacationMode:
         """Manual override takes priority over vacation mode."""
         room_with_override = {
             **SAMPLE_ROOM,
-            "override_temp": 25.0,
+            "override_heat": 25.0,
+            "override_cool": 25.0,
             "override_until": time.time() + 3600,
             "override_type": "boost",
         }
@@ -177,3 +181,35 @@ class TestVacationMode:
         room_state = data["rooms"]["living_room_abc12345"]
         assert room_state["heat_target"] == 15.0
         assert room_state["cool_target"] == 27.0  # eco_cool, not 15
+
+
+class TestSplitOverrideResolution:
+    """Tests for split heat/cool override targets (#313)."""
+
+    def test_resolve_override_auto_uses_split_dead_band(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "auto",
+            "override_type": "custom",
+            "override_heat": 19.5,
+            "override_cool": 23.0,
+            "override_until": None,
+        }
+        targets = coordinator._resolve_target_temps(room, {}, None, None)
+        assert targets.heat == 19.5
+        assert targets.cool == 23.0
+
+    def test_resolve_override_cool_only_heat_none(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        room = {
+            **SAMPLE_ROOM,
+            "climate_mode": "cool_only",
+            "override_type": "custom",
+            "override_heat": None,
+            "override_cool": 24.0,
+            "override_until": None,
+        }
+        targets = coordinator._resolve_target_temps(room, {}, None, None)
+        assert targets.heat is None
+        assert targets.cool == 24.0

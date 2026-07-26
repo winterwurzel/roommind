@@ -538,6 +538,173 @@ class TestCoverageGaps:
         assert result == "cooling"
 
     @pytest.mark.asyncio
+    async def test_infer_device_mode_heat_cool_above_high_cools(self, hass, mock_config_entry):
+        """heat_cool AC above the high setpoint infers cooling (#332)."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        device_state = MagicMock()
+        device_state.state = "heat_cool"
+        device_state.attributes = {
+            "current_temperature": 26.0,
+            "target_temp_low": 20.0,
+            "target_temp_high": 24.0,
+        }
+        hass.states.get = MagicMock(return_value=device_state)
+
+        result = coordinator._infer_device_mode(
+            {
+                "thermostats": [],
+                "acs": ["climate.ac1"],
+                "devices": [{"entity_id": "climate.ac1", "type": "ac", "role": "auto", "heating_system_type": ""}],
+            }
+        )
+        assert result == "cooling"
+
+    @pytest.mark.asyncio
+    async def test_infer_device_mode_heat_cool_below_low_heats(self, hass, mock_config_entry):
+        """heat_cool device below the low setpoint infers heating (#332)."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        device_state = MagicMock()
+        device_state.state = "heat_cool"
+        device_state.attributes = {
+            "current_temperature": 18.0,
+            "target_temp_low": 20.0,
+            "target_temp_high": 24.0,
+        }
+        hass.states.get = MagicMock(return_value=device_state)
+
+        result = coordinator._infer_device_mode(
+            {
+                "thermostats": [],
+                "acs": ["climate.ac1"],
+                "devices": [{"entity_id": "climate.ac1", "type": "ac", "role": "auto", "heating_system_type": ""}],
+            }
+        )
+        assert result == "heating"
+
+    @pytest.mark.asyncio
+    async def test_infer_device_mode_heat_cool_within_band_idle(self, hass, mock_config_entry):
+        """heat_cool device inside the dead-band infers idle (#332)."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        device_state = MagicMock()
+        device_state.state = "heat_cool"
+        device_state.attributes = {
+            "current_temperature": 22.0,
+            "target_temp_low": 20.0,
+            "target_temp_high": 24.0,
+        }
+        hass.states.get = MagicMock(return_value=device_state)
+
+        result = coordinator._infer_device_mode(
+            {
+                "thermostats": [],
+                "acs": ["climate.ac1"],
+                "devices": [{"entity_id": "climate.ac1", "type": "ac", "role": "auto", "heating_system_type": ""}],
+            }
+        )
+        assert result == "idle"
+
+    @pytest.mark.asyncio
+    async def test_infer_device_mode_auto_range_cools(self, hass, mock_config_entry):
+        """auto mode with range setpoints infers cooling above high (#332)."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        device_state = MagicMock()
+        device_state.state = "auto"
+        device_state.attributes = {
+            "current_temperature": 27.0,
+            "target_temp_low": 19.0,
+            "target_temp_high": 23.0,
+        }
+        hass.states.get = MagicMock(return_value=device_state)
+
+        result = coordinator._infer_device_mode(
+            {
+                "thermostats": [],
+                "acs": ["climate.ac1"],
+                "devices": [{"entity_id": "climate.ac1", "type": "ac", "role": "auto", "heating_system_type": ""}],
+            }
+        )
+        assert result == "cooling"
+
+    @pytest.mark.asyncio
+    async def test_infer_device_mode_auto_without_range_idle(self, hass, mock_config_entry):
+        """auto mode without explicit low/high stays idle (conservative, #332)."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        device_state = MagicMock()
+        device_state.state = "auto"
+        device_state.attributes = {
+            "current_temperature": 27.0,
+            "temperature": 23.0,  # single setpoint only — ambiguous direction
+        }
+        hass.states.get = MagicMock(return_value=device_state)
+
+        result = coordinator._infer_device_mode(
+            {
+                "thermostats": [],
+                "acs": ["climate.ac1"],
+                "devices": [{"entity_id": "climate.ac1", "type": "ac", "role": "auto", "heating_system_type": ""}],
+            }
+        )
+        assert result == "idle"
+
+    @pytest.mark.asyncio
+    async def test_climate_off_heat_cool_ac_no_action_displays_cooling(self, hass, mock_config_entry):
+        """#332: climate off + AC in heat_cool without hvac_action -> cooling shown/recorded."""
+        room_with_ac = {
+            **SAMPLE_ROOM,
+            "thermostats": [],
+            "acs": ["climate.bedroom_ac"],
+            "devices": [
+                {"entity_id": "climate.bedroom_ac", "type": "ac", "role": "auto", "heating_system_type": ""},
+            ],
+        }
+        store = _make_store_mock({"living_room_abc12345": room_with_ac})
+        store.get_settings.return_value = {
+            "climate_control_active": False,
+            "outdoor_temp_sensor": "sensor.outdoor_temp",
+        }
+        hass.data = {"roommind": {"store": store}}
+
+        # heat_cool AC, room 26 above high setpoint, NO hvac_action attribute
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(
+                temp="26.0",
+                humidity="55.0",
+                outdoor_temp="30.0",
+                extra={
+                    "climate.bedroom_ac": (
+                        "heat_cool",
+                        {
+                            "current_temperature": 26.0,
+                            "target_temp_low": 20.0,
+                            "target_temp_high": 23.0,
+                            "hvac_modes": ["heat_cool", "off"],
+                        },
+                    ),
+                },
+            ),
+        )
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        for _ in range(13):
+            data = await coordinator._async_update_data()
+
+        room = data["rooms"]["living_room_abc12345"]
+        assert room["mode"] == "cooling"
+        assert room["heating_power"] == 100
+
+        # EKF should have trained with cooling observations, not idle
+        n_idle, n_heating, n_cooling = coordinator._model_manager.get_mode_counts(
+            "living_room_abc12345",
+        )
+        assert n_cooling > 0, "EKF should learn from the self-regulating cooling device"
+
+    @pytest.mark.asyncio
     async def test_observe_device_conflicting_actions(self, hass, mock_config_entry):
         """Conflicting device actions returns None (unobservable)."""
         coordinator = _create_coordinator(hass, mock_config_entry)

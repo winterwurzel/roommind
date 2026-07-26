@@ -94,6 +94,8 @@ def _build_cover_state(coordinator: Any, area_id: str) -> dict[str, Any] | None:
         "current_position": cs.current_position,
         "last_commanded_position": cs.last_commanded_position,
         "last_was_forced": cs.last_was_forced,
+        "owned": cs.owned,
+        "baseline_position": cs.baseline_position,
     }
     if cs.last_change_ts:
         result["last_change_ago_s"] = round(now - cs.last_change_ts)
@@ -108,7 +110,8 @@ def _build_cover_state(coordinator: Any, area_id: str) -> dict[str, Any] | None:
 def _build_compressor_state(coordinator: Any) -> dict[str, Any]:
     """Build compressor group manager state."""
     cgm = coordinator._compressor_manager
-    now = time.time()
+    # CompressorGroupManager stores time.monotonic() stamps, not wall-clock time
+    now = time.monotonic()
     groups: dict[str, Any] = {}
     for gid, state in cgm._states.items():
         group_cfg = cgm._groups.get(gid)

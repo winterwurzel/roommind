@@ -7,11 +7,9 @@
   "panel.loading": "Laden...",
   "panel.no_areas": "Keine Bereiche in Home Assistant konfiguriert.",
   "panel.no_areas_hint": "Bereiche in den HA-Einstellungen anlegen.",
-
   "badge.beta": "Beta",
   "badge.beta_hint": "Dieses Feature ist in der Beta-Phase und kann sich in zukünftigen Updates noch ändern.",
   "common.learn_more": "Mehr erfahren",
-
   "panel.stat.rooms": "Räume",
   "panel.stat.heating": "Heizen",
   "panel.stat.cooling": "Kühlen",
@@ -24,7 +22,6 @@
   "panel.floor_other": "Sonstige",
   "panel.reorder": "Räume sortieren",
   "panel.reorder_done": "Fertig",
-
   "room.back": "Zurück zu den Räumen",
   "room.section.climate_mode": "Klimamodus",
   "room.section.schedule": "Zeitplan & Temperaturen",
@@ -51,21 +48,22 @@
   "room.error_save_fallback": "Konfiguration konnte nicht gespeichert werden",
   "room.error_delete_fallback": "Konfiguration konnte nicht gelöscht werden",
   "room.climate_control_toggle": "Klimasteuerung",
-  "room.climate_control_hint": "Wenn deaktiviert, steuert RoomMind keine Geräte in diesem Raum",
+  "room.climate_control_hint": "Wenn deaktiviert, steuert RoomMind die Geräte in diesem Raum nicht mehr. Sie behalten ihre aktuellen Einstellungen und können eigenständig weiter heizen oder kühlen. RoomMind schaltet sie nicht aus.",
   "room.outdoor_toggle": "Außenbereich",
   "room.outdoor_hint": "Deaktiviert Klimasteuerung, Schimmelerkennung und Modell-Training. Sensorüberwachung läuft weiter.",
   "room.alias.placeholder": "Eigener Anzeigename",
   "room.alias.clear": "Auf Bereichsname zurücksetzen",
-
   "override.label": "Temporärer Override",
   "override.comfort": "Komfort",
   "override.eco": "Eco",
   "override.custom": "Individuell",
   "override.target": "Ziel:",
+  "override.heat_to": "Heizen bis:",
+  "override.cool_above": "Kühlen ab:",
+  "override.invalid_band": "Das Kühlziel muss mindestens so hoch wie das Heizziel sein",
   "override.activate_for": "Aktivieren für:",
   "override.error_set": "Override konnte nicht gesetzt werden",
   "override.error_clear": "Override konnte nicht aufgehoben werden",
-
   "hero.target": "Ziel",
   "hero.override": "Override",
   "hero.remaining": "noch {time}",
@@ -79,7 +77,9 @@
   "hero.not_configured": "Noch nicht konfiguriert",
   "hero.mpc_learning_paused": "MPC-Lernen pausiert",
   "hero.mpc_learning_paused.outdoor_unavailable": "RoomMind benötigt eine Außentemperatur, um das thermische Modell dieses Raums zu lernen. Der konfigurierte Außensensor ist nicht verfügbar und es ist keine Wetter-Entity als Fallback gesetzt. Konfiguriere eine der beiden in den Einstellungen.",
-
+  "hero.compressor_protection_min_off": "Kompressorschutz: wartet auf Mindestpause",
+  "hero.compressor_protection_min_run": "Kompressorschutz: Mindestlaufzeit aktiv",
+  "hero.compressor_protection_info": "Dieser Raum teilt sich eine Außeneinheit (Kompressor) mit anderen Räumen. Um Kurzzyklen zu vermeiden, erzwingt die Kompressorgruppe eine Mindestlaufzeit und eine Mindestpause, bevor dieses Gerät wieder umschalten darf.",
   "card.target": "Ziel",
   "card.waiting": "Warte auf Daten...",
   "card.humidity": "{value}% Luftfeuchtigkeit",
@@ -97,7 +97,6 @@
   "card.mpc_active": "MPC aktiv",
   "card.mpc_learning": "MPC lernt",
   "card.not_controlled": "Nicht von RoomMind gesteuert",
-
   "mode.auto": "Automatisch",
   "mode.auto_desc": "Heizt und kühlt automatisch basierend auf der Zieltemperatur",
   "mode.heat_only": "Nur Heizen",
@@ -107,7 +106,6 @@
   "mode.heating": "Heizen",
   "mode.cooling": "Kühlen",
   "mode.idle": "Standby",
-
   "schedule.add_schedule": "Zeitplan hinzufügen",
   "schedule.select_schedule": "Zeitplan-Helfer auswählen",
   "schedule.create_helper_hint": "Neuen Zeitplan-Helfer in HA erstellen",
@@ -130,10 +128,10 @@
   "schedule.help_header": "Wie funktionieren Zeitpläne?",
   "schedule.help_temps_title": "Wie wird die Zieltemperatur bestimmt?",
   "schedule.help_temps": "Die Zieltemperatur folgt dieser Prioritätskette:",
-  "schedule.help_temps_1": "<strong>Manueller Override</strong> \u2013 Ein temporärer Komfort-/Eco-/Individueller Override hat immer die höchste Priorität.",
-  "schedule.help_temps_2": "<strong>Block-Temperatur</strong> \u2013 Wenn der aktive Zeitblock einen <code>temperature</code>-Wert in seinen Daten hat, wird dieser verwendet.",
-  "schedule.help_temps_3": "<strong>Komforttemperatur</strong> \u2013 Wenn der Zeitplan \"an\" ist, aber der Block keine Temperatur hat, wird die Komfort-Fallback-Temperatur verwendet.",
-  "schedule.help_temps_4": "<strong>Eco-Temperatur</strong> \u2013 Wenn der Zeitplan \"aus\" ist (außerhalb aller Zeitblöcke), wird die Eco-Temperatur verwendet.",
+  "schedule.help_temps_1": "<strong>Manueller Override</strong> – Ein temporärer Komfort-/Eco-/Individueller Override hat immer die höchste Priorität.",
+  "schedule.help_temps_2": "<strong>Block-Temperatur</strong> – Wenn der aktive Zeitblock einen <code>temperature</code>-Wert in seinen Daten hat, wird dieser verwendet.",
+  "schedule.help_temps_3": "<strong>Komforttemperatur</strong> – Wenn der Zeitplan \"an\" ist, aber der Block keine Temperatur hat, wird die Komfort-Fallback-Temperatur verwendet.",
+  "schedule.help_temps_4": "<strong>Eco-Temperatur</strong> – Wenn der Zeitplan \"aus\" ist (außerhalb aller Zeitblöcke), wird die Eco-Temperatur verwendet.",
   "schedule.help_block_title": "Temperatur pro Zeitblock setzen",
   "schedule.help_block": "Du kannst für jeden Zeitblock eine eigene Temperatur setzen, indem du einen <code>temperature</code>-Wert in der YAML-Konfiguration des Zeitplans angibst:",
   "schedule.help_block_note": "Wenn ein Block keinen <code>temperature</code>-Wert hat, wird stattdessen die Komfort-Fallback-Temperatur verwendet.",
@@ -156,7 +154,6 @@
   "schedule.from_schedule_split": "{heat}{unit} / {cool}{unit} vom Zeitplan",
   "schedule.fallback": "{temp}{unit} (Fallback)",
   "schedule.eco_detail": "{temp}{unit} (Eco)",
-
   "devices.climate_entities": "Klimageräte",
   "devices.temp_sensors": "Temperatursensoren",
   "devices.humidity_sensors": "Feuchtigkeitssensoren",
@@ -206,10 +203,8 @@
   "devices.info.modes_body": "Im Leerlauf gilt nur für Klimageräte. Ausschalten schaltet das Gerät aus. Nur Ventilator hält die Luftzirkulation ohne Heizen oder Kühlen aufrecht. Absenkung lässt den aktuellen Modus aktiv, verschiebt den Sollwert aber um 2°C vom Raumziel weg. Dieser Offset ist derzeit fest. Für Thermostate hält Niedrig den TRV aktiv auf minimalem Sollwert statt ihn auszuschalten, nützlich für batteriebetriebene Zigbee-TRVs, die beim Ausschalten in den Tiefschlaf gehen.",
   "devices.info.heat_source_title": "Intelligente Quellenwahl",
   "devices.info.heat_source_body": "Diese Funktion erscheint nur, wenn ein Raum sowohl ein Thermostat/TRV als auch ein Klimagerät und zusätzlich einen externen Temperatursensor hat. RoomMind kann dann je nach Temperaturdifferenz und Außenbedingungen auswählen, welche Quelle das Heizen übernimmt.",
-
   "hero.window_open": "Fenster offen – pausiert",
   "card.window_open": "Fenster offen",
-
   "room.section.covers": "Rollos & Jalousien",
   "covers.section_title": "Rollos & Jalousien",
   "covers.auto_control": "Automatische Rollosteuerung",
@@ -225,6 +220,8 @@
   "covers.add_cover": "Rollo-Entität hinzufügen...",
   "covers.shading_active": "Beschattung aktiv",
   "covers.auto_paused": "Automatik pausiert (manuell übersteuert)",
+  "covers.auto_paused_until": "Automatik pausiert bis",
+  "covers.resume_auto": "Automatik jetzt fortsetzen",
   "covers.done": "Fertig",
   "covers.night_close": "Nachts automatisch schließen",
   "covers.night_close_hint": "Rolläden bei Sonnenuntergang schließen und bei Sonnenaufgang öffnen.",
@@ -296,11 +293,10 @@
   "covers.orientation_SW_full": "Südwest",
   "covers.orientation_W_full": "West",
   "covers.orientation_NW_full": "Nordwest",
-
   "settings.general_title": "Allgemein",
   "settings.group_by_floor": "Räume nach Etagen gruppieren",
   "settings.climate_control_active": "Klimasteuerung aktiv",
-  "settings.climate_control_hint": "Wenn deaktiviert, überwacht RoomMind weiterhin alle Sensoren und trainiert das Modell, steuert aber keine Heizungen oder Klimaanlagen mehr an.",
+  "settings.climate_control_hint": "Wenn deaktiviert, überwacht RoomMind weiterhin alle Sensoren und trainiert das Modell, sendet aber keine Befehle an deine Heizungen oder Klimaanlagen. Die Geräte behalten ihren aktuellen Modus und Sollwert und können eigenständig weiter heizen oder kühlen. RoomMind schaltet sie nicht aus.",
   "settings.learning_title": "Modell-Training",
   "settings.learning_hint": "Wenn pausiert, sammelt RoomMind keine neuen Messdaten und trainiert das thermische Modell nicht weiter. Bestehende Modelldaten bleiben erhalten.",
   "settings.learning_exceptions": "Ausnahmen",
@@ -324,9 +320,7 @@
   "settings.saving": "Speichern...",
   "settings.saved": "Gespeichert",
   "settings.error": "Fehler beim Speichern",
-
   "devices.using_builtin_sensor": "Nutzt den eingebauten Thermostat-Sensor",
-
   "settings.climate_intelligence": "Klimaintelligenz",
   "settings.control_mode": "Steuerungsmodus",
   "settings.control_mode_simple": "Einfach (Ein/Aus)",
@@ -342,7 +336,6 @@
   "settings.outdoor_unavailable_notify_hint": "Zeigt eine Home-Assistant-Benachrichtigung, wenn weder Außensensor noch Wetter-Entity 30 Minuten lang eine Temperatur geliefert haben. In dieser Zeit pausiert RoomMind das Lernen des thermischen Modells, um Korruption zu vermeiden.",
   "settings.prediction_enabled": "Temperaturvorhersage",
   "settings.prediction_enabled_hint": "Zeigt den vorhergesagten Temperaturverlauf im Analyse-Diagramm. Bei langsamer Performance deaktivieren.",
-
   "vacation.title": "Urlaubsmodus",
   "vacation.hint": "Setzt alle Räume auf eine Absenktemperatur bis zum Enddatum.",
   "vacation.active_label": "Urlaubsmodus aktiv",
@@ -350,7 +343,6 @@
   "vacation.setback_temp": "Absenktemperatur",
   "vacation.no_end_date": "Kein Enddatum",
   "vacation.deactivate": "Deaktivieren",
-
   "tabs.analytics": "Analyse",
   "analytics.select_room": "Raum auswählen",
   "analytics.temperature": "Temperatur",
@@ -423,8 +415,7 @@
   "analytics.copied_to_clipboard": "Kopiert!",
   "analytics.range_from": "Von",
   "analytics.range_to": "Bis",
-  "analytics.chart_info_body": "**Linien:** Die durchgezogene orangene Linie zeigt die gemessene Raumtemperatur. Die gr\u00fcne gestrichelte Linie ist die Zieltemperatur aus deinem Zeitplan. Die blaue gepunktete Linie ist die Temperaturvorhersage des Modells.\n\n**Schattierte Bereiche:** Rote Schattierung markiert Heizperioden, blaue K\u00fchlung und t\u00fcrkise Bereiche zeigen an, wenn ein Fenster offen war.\n\n**Zukunftsprognose (rechts der 'Jetzt'-Linie):** Die gr\u00fcne gestrichelte Linie zeigt die kommenden Zieltemperaturen f\u00fcr die n\u00e4chsten 3 Stunden. Die blaue gepunktete Linie zeigt den vorhergesagten Temperaturverlauf.\n\n**Vorhersage-Modus:** Wenn 'MPC aktiv' angezeigt wird, nutzt die Vorhersage den vollst\u00e4ndigen MPC-Optimizer mit intelligentem Vorheizen/-k\u00fchlen. Solange das Modell noch lernt, wird eine einfachere Simulation verwendet.\n\n**Einschr\u00e4nkungen:** Die Vorhersage nimmt an, dass aktuelle Bedingungen konstant bleiben (Au\u00dfentemperatur, Fensterstatus). Die Genauigkeit h\u00e4ngt davon ab, wie gut das Modell deinen Raum bereits gelernt hat \u2014 anfangs k\u00f6nnen die Vorhersagen ungenau sein. Sobald MPC aktiviert wird, werden die Vorhersagen deutlich zuverl\u00e4ssiger.",
-
+  "analytics.chart_info_body": "**Linien:** Die durchgezogene orangene Linie zeigt die gemessene Raumtemperatur. Die grüne gestrichelte Linie ist die Zieltemperatur aus deinem Zeitplan. Die blaue gepunktete Linie ist die Temperaturvorhersage des Modells.\n\n**Schattierte Bereiche:** Rote Schattierung markiert Heizperioden, blaue Kühlung und türkise Bereiche zeigen an, wenn ein Fenster offen war.\n\n**Zukunftsprognose (rechts der 'Jetzt'-Linie):** Die grüne gestrichelte Linie zeigt die kommenden Zieltemperaturen für die nächsten 3 Stunden. Die blaue gepunktete Linie zeigt den vorhergesagten Temperaturverlauf.\n\n**Vorhersage-Modus:** Wenn 'MPC aktiv' angezeigt wird, nutzt die Vorhersage den vollständigen MPC-Optimizer mit intelligentem Vorheizen/-kühlen. Solange das Modell noch lernt, wird eine einfachere Simulation verwendet.\n\n**Einschränkungen:** Die Vorhersage nimmt an, dass aktuelle Bedingungen konstant bleiben (Außentemperatur, Fensterstatus). Die Genauigkeit hängt davon ab, wie gut das Modell deinen Raum bereits gelernt hat — anfangs können die Vorhersagen ungenau sein. Sobald MPC aktiviert wird, werden die Vorhersagen deutlich zuverlässiger.",
   "presence.title": "Anwesenheitserkennung",
   "presence.hint": "Eco-Temperatur wenn niemand zu Hause ist.",
   "presence.hint_detail": "Wenn aktiviert, werden alle Räume auf Eco-Temperatur gesetzt, sobald keine der konfigurierten Personen zu Hause ist. Pro Raum kann optional eingeschränkt werden, welche Personen relevant sind.",
@@ -448,13 +439,11 @@
   "presence.clears_override_label": "Abwesenheit beendet Override",
   "presence.clears_override_hint": "Sobald niemand zuhause ist, wird ein manueller Override pausiert und der Raum folgt der Abwesenheits-Aktion. Kommt jemand zurück, läuft der Override weiter, bis er abläuft.",
   "card.presence_away": "Abwesend",
-
   "valve_protection.title": "Ventilschutz",
   "valve_protection.hint": "Bewegt inaktive TRV-Ventile regelmäßig kurz, um Festsitzen oder Verkalkung zu verhindern.",
   "valve_protection.interval_label": "Zyklusintervall",
   "valve_protection.interval_suffix": "Tage",
   "valve_protection.interval_hint": "Wie lange ein Ventil inaktiv sein darf, bevor es bewegt wird (1–90 Tage)",
-
   "compressor.title": "Kompressorschutz",
   "compressor.no_groups": "Keine Kompressorgruppen konfiguriert.",
   "compressor.add_group": "Kompressorgruppe hinzufügen",
@@ -481,7 +470,6 @@
   "compressor.action_script_hint": "Ein Home Assistant Skript das bei jedem Wechsel des Heiz-/Kühlbedarfs ausgeführt wird. Nützlich für Systeme die spezielle Befehle benötigen, z.B. zum Aufheben eines Vaillant Quick Veto oder Schalten eines Relais. Funktioniert mit oder ohne Hauptgerät. Ohne Hauptgerät wird nur das Skript ausgelöst. Erhält Variablen: action (heat/cool/idle), master_entity, members, active_members.",
   "compressor.enforce_uniform_mode": "Einheitlichen Modus erzwingen",
   "compressor.enforce_uniform_mode_hint": "Alle Thermostate in dieser Gruppe müssen im gleichen HVAC-Modus arbeiten (alle heizen oder alle kühlen). Räume, die dem aufgelösten Gruppenmodus widersprechen, werden auf Leerlauf gesetzt. Für Wärmepumpen die automatisch starten, aber alle angeschlossenen Geräte im gleichen Modus benötigen.",
-
   "mold.title": "Schimmelschutz",
   "mold.detection": "Schimmelerkennung",
   "mold.detection_desc": "Benachrichtigung bei Schimmelgefahr durch hohe Luftfeuchtigkeit",
@@ -500,7 +488,6 @@
   "card.mold_critical": "Schimmelgefahr!",
   "card.mold_prevention": "Schimmelschutz +{delta}{unit}",
   "room.mold_surface_rh": "Geschätzte Oberflächenfeuchte: {value}%",
-
   "settings.intro.general": "Grundlegende Anzeige- und Steuerungseinstellungen.",
   "settings.intro.sensors": "Außensensoren und Wetterdaten für eine präzise Klimasteuerung konfigurieren.",
   "settings.intro.control": "Wähle, wie RoomMind deine Klimageräte steuert und setze Priorität und Schwellenwerte.",
@@ -512,7 +499,6 @@
   "settings.intro.notifications": "Konfiguriere wer Benachrichtigungen erhält und wie.",
   "settings.intro.learning": "Thermisches Modelltraining verwalten und Lernen nach Änderungen beschleunigen.",
   "settings.intro.reset": "Gelernte thermische Modelldaten löschen. Das Modell beginnt von vorne zu lernen.",
-
   "notifications.title": "Benachrichtigungen",
   "notifications.enabled": "Benachrichtigungen aktivieren",
   "notifications.enabled_hint": "Wenn deaktiviert, werden keine Benachrichtigungen gesendet — weder an Geräte noch an die HA-Seitenleiste.",
@@ -527,7 +513,6 @@
   "notifications.cooldown_hint": "Mindestabstand zwischen wiederholten Warnungen pro Raum",
   "notifications.mold_prevention_notify": "Bei Aktivierung der Prävention benachrichtigen",
   "notifications.mold_prevention_notify_hint": "Auch benachrichtigen wenn die Prävention aktiviert wird (Temperaturerhöhung)",
-
   "room.section.heat_source": "Heizquellen-Orchestrierung",
   "heat_source.toggle": "Intelligente Quellenauswahl",
   "heat_source.toggle_hint": "Wenn dieser Raum sowohl Heizkörper-Thermostate als auch eine AC/Wärmepumpe hat, leitet RoomMind die Heizanforderung intelligent an das effizienteste Gerät weiter, basierend auf Temperaturlücke und Außenbedingungen.",

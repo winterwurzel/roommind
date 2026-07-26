@@ -1290,7 +1290,11 @@ class TestPerCoverMinPositionCorrection:
         """When cover_min_positions is set and decision changes, commanded position is corrected."""
         cm = _make_cover_manager()
         cm.evaluate.return_value = CoverDecision(target_position=10, changed=True, reason="deploy")
-        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        hass = _make_hass()
+        positional_state = MagicMock()
+        positional_state.attributes = {"supported_features": 15}
+        hass.states.get = MagicMock(return_value=positional_state)
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
         room = _make_room(
             covers=["cover.a", "cover.b"],
             cover_min_positions={"cover.a": 40},
@@ -1314,11 +1318,15 @@ class TestPerCoverMinPositionCorrection:
 
     @pytest.mark.asyncio
     @patch("custom_components.roommind.managers.cover_orchestrator.CoverManager.async_apply", new_callable=AsyncMock)
-    async def test_no_correction_without_cover_min_positions(self, mock_apply):
-        """Without cover_min_positions, set_commanded_position is NOT called."""
+    async def test_correction_without_min_positions_uses_target(self, mock_apply):
+        """Without cover_min_positions, expected position falls back to the decision's target."""
         cm = _make_cover_manager()
         cm.evaluate.return_value = CoverDecision(target_position=10, changed=True, reason="deploy")
-        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        hass = _make_hass()
+        positional_state = MagicMock()
+        positional_state.attributes = {"supported_features": 15}
+        hass.states.get = MagicMock(return_value=positional_state)
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
         room = _make_room(covers=["cover.a"])
 
         with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=25.0):
@@ -1334,7 +1342,7 @@ class TestPerCoverMinPositionCorrection:
                 has_override=False,
             )
 
-        cm.set_commanded_position.assert_not_called()
+        cm.set_commanded_position.assert_called_once_with("lr", 10)
 
     @pytest.mark.asyncio
     async def test_night_close_negative_offset_closes_before_sunset(self):
@@ -1403,6 +1411,110 @@ class TestPerCoverMinPositionCorrection:
         call_kwargs = cm.evaluate.call_args[1]
         assert call_kwargs["forced_position"] == 0
         assert call_kwargs["forced_reason"] == "night_close"
+
+
+class TestBinaryCoverExpectedPosition:
+    @pytest.mark.asyncio
+    @patch("custom_components.roommind.managers.cover_orchestrator.CoverManager.async_apply", new_callable=AsyncMock)
+    async def test_binary_cover_expected_zero_when_closing(self, mock_apply):
+        """Binary cover (no SET_POSITION) commanded below 100 → expected reported 0."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        cm.evaluate.return_value = CoverDecision(target_position=39, changed=True, reason="deploy")
+        binary_state = MagicMock()
+        binary_state.attributes = {"supported_features": 3}
+        hass.states.get = MagicMock(return_value=binary_state)
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+        room = _make_room(covers=["cover.binary"], covers_auto_enabled=True)
+        with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=25.0):
+            await orch.async_process(
+                area_id="lr",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=None),
+                mode=MODE_HEATING,
+                current_temp=22.0,
+                outdoor_temp=20.0,
+                q_solar=0.5,
+                predicted_peak_temp=25.0,
+                has_override=False,
+            )
+        cm.set_commanded_position.assert_called_once_with("lr", 0)
+
+    @pytest.mark.asyncio
+    @patch("custom_components.roommind.managers.cover_orchestrator.CoverManager.async_apply", new_callable=AsyncMock)
+    async def test_mixed_room_expected_average(self, mock_apply):
+        """Positional (39) + binary (0) → expected average 19."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        cm.evaluate.return_value = CoverDecision(target_position=39, changed=True, reason="deploy")
+        positional = MagicMock()
+        positional.attributes = {"supported_features": 15}
+        binary = MagicMock()
+        binary.attributes = {"supported_features": 3}
+        hass.states.get = MagicMock(side_effect=lambda eid: positional if eid == "cover.pos" else binary)
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+        room = _make_room(covers=["cover.pos", "cover.binary"], covers_auto_enabled=True)
+        with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=25.0):
+            await orch.async_process(
+                area_id="lr",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=None),
+                mode=MODE_HEATING,
+                current_temp=22.0,
+                outdoor_temp=20.0,
+                q_solar=0.5,
+                predicted_peak_temp=25.0,
+                has_override=False,
+            )
+        cm.set_commanded_position.assert_called_once_with("lr", 19)
+
+    @pytest.mark.asyncio
+    async def test_unavailable_covers_skipped_no_correction(self):
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        cm.evaluate.return_value = CoverDecision(target_position=39, changed=True, reason="deploy")
+        hass.states.get = MagicMock(return_value=None)
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+        room = _make_room(covers=["cover.gone"], covers_auto_enabled=True)
+        with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=25.0):
+            await orch.async_process(
+                area_id="lr",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=None),
+                mode=MODE_HEATING,
+                current_temp=22.0,
+                outdoor_temp=20.0,
+                q_solar=0.5,
+                predicted_peak_temp=25.0,
+                has_override=False,
+            )
+        cm.set_commanded_position.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("custom_components.roommind.managers.cover_orchestrator.CoverManager.async_apply", new_callable=AsyncMock)
+    async def test_binary_cover_expected_hundred_when_opening(self, mock_apply):
+        """Binary cover (no SET_POSITION) commanded to 100 → expected reported 100."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        cm.evaluate.return_value = CoverDecision(target_position=100, changed=True, reason="low_solar")
+        binary_state = MagicMock()
+        binary_state.attributes = {"supported_features": 3}
+        hass.states.get = MagicMock(return_value=binary_state)
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+        room = _make_room(covers=["cover.binary"], covers_auto_enabled=True)
+        with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=25.0):
+            await orch.async_process(
+                area_id="lr",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=None),
+                mode=MODE_HEATING,
+                current_temp=22.0,
+                outdoor_temp=20.0,
+                q_solar=0.5,
+                predicted_peak_temp=25.0,
+                has_override=False,
+            )
+        cm.set_commanded_position.assert_called_once_with("lr", 100)
 
 
 # ── Orientation gate tests ───────────────────────────────────────────

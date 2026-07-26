@@ -25,7 +25,8 @@ class TestVacationAndOverride:
         await real_store.async_update_room(
             "living_room",
             {
-                "override_temp": 25.0,
+                "override_heat": 25.0,
+                "override_cool": 25.0,
                 "override_until": time.time() + 3600,
                 "override_type": "custom",
             },
@@ -127,7 +128,8 @@ class TestPresenceInteractions:
         await real_store.async_update_room(
             "living_room",
             {
-                "override_temp": 23.0,
+                "override_heat": 23.0,
+                "override_cool": 23.0,
                 "override_until": time.time() + 3600,
                 "override_type": "custom",
             },
@@ -179,7 +181,8 @@ class TestWindowAndOverride:
         await real_store.async_update_room(
             "living_room",
             {
-                "override_temp": 25.0,
+                "override_heat": 25.0,
+                "override_cool": 25.0,
                 "override_until": time.time() + 3600,
                 "override_type": "boost",
             },

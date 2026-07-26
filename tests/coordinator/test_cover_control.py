@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -365,3 +366,20 @@ class TestCoverageGaps:
         # Verify cloud_series was passed through
         _, kwargs = mock_build.call_args
         assert kwargs["cloud_series"] == cloud_series
+
+    def test_clear_cover_override_drives_real_delegate_chain(self, hass, mock_config_entry):
+        """coordinator.clear_cover_override -> CoverOrchestrator.clear_user_override -> CoverManager.
+
+        Regression/coverage: previous WS tests mocked coordinator.clear_cover_override
+        entirely, leaving both delegate bodies uncovered. Exercise the real chain
+        end-to-end with a real CoverOrchestrator + CoverManager (not mocked).
+        """
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        area_id = "bedroom_abc"
+
+        coordinator._cover_manager._get_state(area_id).user_override_until = time.time() + 3600
+        assert coordinator._cover_orchestrator.is_user_override_active(area_id) is True
+
+        coordinator.clear_cover_override(area_id)
+
+        assert coordinator._cover_orchestrator.is_user_override_active(area_id) is False

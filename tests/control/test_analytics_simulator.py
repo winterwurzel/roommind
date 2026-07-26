@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from custom_components.roommind.control.analytics_simulator import (
     _simulate_bangbang,
     _simulate_mpc,
@@ -207,23 +209,25 @@ class TestBuildForecastSolarSeries:
         assert result is not None
         assert all(v >= 0.0 for v in result)
 
+    @pytest.mark.freeze_time("2026-06-21 12:00:00", tz_offset=0)
     def test_hourly_clouds_expanded_per_block(self):
         """Hourly cloud_coverage is expanded to one value per 5-min block.
 
         Without expansion, only one block per forecast entry would carry the
         cloud value (the rest defaulting to clear-sky). With expansion, the
         first hour stays clear and the second hour stays fully cloudy.
+
+        Time is frozen to solar noon so both hours have the sun well above the
+        horizon; otherwise the series starts from wall-clock time and near
+        sunrise hour 2's higher sun can exceed hour 1's, flaking the assertion.
         """
         forecast = [{"cloud_coverage": 0}, {"cloud_coverage": 100}]
         result = build_forecast_solar_series(48.0, 11.0, forecast, 24)
         assert result is not None
         assert len(result) == 24
-        # Hour 1 clear, hour 2 fully cloudy: hour 1 mean must dominate
-        # (guarded against nighttime where both are 0).
         hour1_mean = sum(result[:12]) / 12
         hour2_mean = sum(result[12:]) / 12
-        if hour1_mean > 0 or hour2_mean > 0:
-            assert hour1_mean >= hour2_mean
+        assert hour1_mean > hour2_mean
 
 
 # ---------------------------------------------------------------------------

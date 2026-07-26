@@ -10,6 +10,7 @@ from custom_components.roommind.const import DOMAIN
 from custom_components.roommind.websocket_api import (
     _csv_to_points,
     _safe_float,
+    websocket_covers_clear_override,
     websocket_delete_room,
     websocket_get_analytics,
     websocket_get_diagnostics,
@@ -38,6 +39,7 @@ _thermal_reset = websocket_thermal_reset.__wrapped__
 _thermal_reset_all = websocket_thermal_reset_all.__wrapped__
 _get_analytics = websocket_get_analytics.__wrapped__
 _get_diagnostics = websocket_get_diagnostics.__wrapped__
+_covers_clear_override = websocket_covers_clear_override.__wrapped__
 
 
 @pytest.fixture
@@ -588,7 +590,8 @@ async def test_override_set_boost(ws_hass, store, connection):
     connection.send_result.assert_called_once_with(3, {"success": True})
 
     room = store.get_room("living")
-    assert room["override_temp"] == 22.0
+    assert room["override_heat"] == 22.0
+    assert room["override_cool"] == 24.0
     assert room["override_type"] == "boost"
     assert room["override_until"] is not None
 
@@ -619,7 +622,8 @@ async def test_override_set_eco(ws_hass, store, connection):
 
     connection.send_result.assert_called_once_with(3, {"success": True})
     room = store.get_room("bed")
-    assert room["override_temp"] == 16.0
+    assert room["override_heat"] == 16.0
+    assert room["override_cool"] == 27.0
     assert room["override_type"] == "eco"
 
 
@@ -637,14 +641,16 @@ async def test_override_set_custom(ws_hass, store, connection):
         "type": "roommind/override/set",
         "area_id": "office",
         "override_type": "custom",
-        "temperature": 24.5,
+        "heat": 21.0,
+        "cool": 24.5,
         "duration": 1.0,
     }
     await _override_set(ws_hass, connection, msg)
 
     connection.send_result.assert_called_once_with(3, {"success": True})
     room = store.get_room("office")
-    assert room["override_temp"] == 24.5
+    assert room["override_heat"] == 21.0
+    assert room["override_cool"] == 24.5
     assert room["override_type"] == "custom"
 
 
@@ -700,7 +706,8 @@ async def test_override_clear(ws_hass, store, connection):
 
     connection.send_result.assert_called_once_with(4, {"success": True})
     room = store.get_room("bath")
-    assert room.get("override_temp") is None
+    assert room.get("override_heat") is None
+    assert room.get("override_cool") is None
     assert room.get("override_until") is None
     assert room.get("override_type") is None
 
@@ -725,13 +732,14 @@ async def test_override_set_without_duration_permanent(ws_hass, store, connectio
         "type": "roommind/override/set",
         "area_id": "perm",
         "override_type": "custom",
-        "temperature": 24.0,
+        "heat": 24.0,
     }
     await _override_set(ws_hass, connection, msg)
 
     connection.send_result.assert_called_once_with(3, {"success": True})
     room = store.get_room("perm")
-    assert room["override_temp"] == 24.0
+    assert room["override_heat"] == 24.0
+    assert room["override_cool"] is None
     assert room["override_until"] is None
     assert room["override_type"] == "custom"
 
@@ -752,6 +760,92 @@ async def test_override_set_nonexistent_room_errors(ws_hass, store, connection):
 
     connection.send_error.assert_called_once()
     assert connection.send_error.call_args[0][1] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_override_set_rejects_cool_below_heat(ws_hass, store, connection):
+    """Custom override with cool < heat sends an error."""
+    await store.async_load()
+
+    save_msg = {"id": 2, "type": "roommind/rooms/save", "area_id": "study"}
+    await _save_room(ws_hass, connection, save_msg)
+    connection.send_result.reset_mock()
+    connection.send_error.reset_mock()
+
+    msg = {
+        "id": 3,
+        "type": "roommind/override/set",
+        "area_id": "study",
+        "override_type": "custom",
+        "heat": 24.0,
+        "cool": 21.0,
+    }
+    await _override_set(ws_hass, connection, msg)
+
+    connection.send_error.assert_called_once()
+    assert connection.send_error.call_args[0][1] == "invalid"
+    room = store.get_room("study")
+    assert room.get("override_heat") is None
+    assert room.get("override_cool") is None
+
+
+@pytest.mark.asyncio
+async def test_override_set_boost_heat_only_no_cool(ws_hass, store, connection):
+    """Boost in a heat_only room sets only the heat target."""
+    await store.async_load()
+
+    save_msg = {
+        "id": 2,
+        "type": "roommind/rooms/save",
+        "area_id": "cellar",
+        "climate_mode": "heat_only",
+        "comfort_temp": 22.0,
+    }
+    await _save_room(ws_hass, connection, save_msg)
+    connection.send_result.reset_mock()
+
+    msg = {
+        "id": 3,
+        "type": "roommind/override/set",
+        "area_id": "cellar",
+        "override_type": "boost",
+    }
+    await _override_set(ws_hass, connection, msg)
+
+    connection.send_result.assert_called_once_with(3, {"success": True})
+    room = store.get_room("cellar")
+    assert room["override_heat"] == 22.0
+    assert room["override_cool"] is None
+
+
+@pytest.mark.asyncio
+async def test_override_set_custom_cool_only_forces_heat_none(ws_hass, store, connection):
+    """Custom override in a cool_only room drops any provided heat target."""
+    await store.async_load()
+
+    save_msg = {
+        "id": 2,
+        "type": "roommind/rooms/save",
+        "area_id": "server",
+        "climate_mode": "cool_only",
+    }
+    await _save_room(ws_hass, connection, save_msg)
+    connection.send_result.reset_mock()
+
+    msg = {
+        "id": 3,
+        "type": "roommind/override/set",
+        "area_id": "server",
+        "override_type": "custom",
+        "heat": 20.0,
+        "cool": 23.0,
+    }
+    await _override_set(ws_hass, connection, msg)
+
+    connection.send_result.assert_called_once_with(3, {"success": True})
+    room = store.get_room("server")
+    assert room["override_heat"] is None
+    assert room["override_cool"] == 23.0
 
 
 @pytest.mark.asyncio
@@ -822,6 +916,89 @@ async def test_list_rooms_includes_active_schedule_index(ws_hass, store, connect
     live = rooms["buero"]["live"]
     assert "active_schedule_index" in live
     assert live["active_schedule_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_rooms_includes_compressor_protection_status(ws_hass, store, connection):
+    """Verify compressor_protection_active/reason pass through from the
+    coordinator into list_rooms' live data.
+
+    Regression test: these fields were added to the coordinator's room-state
+    dict but the websocket_list_rooms handler builds `live` from an explicit
+    field allow-list, so they were silently dropped until this handler was
+    also updated (#386).
+    """
+    await store.async_load()
+
+    save_msg = {
+        "id": 2,
+        "type": "roommind/rooms/save",
+        "area_id": "kinderzimmer",
+        "thermostats": ["climate.kz_trv"],
+        "temperature_sensor": "sensor.kz_temp",
+    }
+    await _save_room(ws_hass, connection, save_msg)
+    connection.send_result.reset_mock()
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.rooms = {
+        "kinderzimmer": {
+            "current_temp": 25.0,
+            "target_temp": 25.0,
+            "mode": "idle",
+            "compressor_protection_active": True,
+            "compressor_protection_reason": "min_off",
+        }
+    }
+    mock_coordinator.async_request_refresh = AsyncMock()
+    ws_hass.data[DOMAIN]["coordinator"] = mock_coordinator
+
+    list_msg = {"id": 3, "type": "roommind/rooms/list"}
+    await _list_rooms(ws_hass, connection, list_msg)
+
+    connection.send_result.assert_called_once()
+    call_args = connection.send_result.call_args
+    live = call_args[0][1]["rooms"]["kinderzimmer"]["live"]
+    assert live["compressor_protection_active"] is True
+    assert live["compressor_protection_reason"] == "min_off"
+
+
+@pytest.mark.asyncio
+async def test_list_rooms_includes_cover_override_until(ws_hass, store, connection):
+    """Verify cover_override_until appears in live data from list_rooms."""
+    await store.async_load()
+
+    save_msg = {
+        "id": 2,
+        "type": "roommind/rooms/save",
+        "area_id": "schlafzimmer",
+        "thermostats": ["climate.sz_trv"],
+        "temperature_sensor": "sensor.sz_temp",
+        "covers": ["cover.sz_rollo"],
+    }
+    await _save_room(ws_hass, connection, save_msg)
+    connection.send_result.reset_mock()
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.rooms = {
+        "schlafzimmer": {
+            "current_temp": 20.0,
+            "target_temp": 21.0,
+            "mode": "idle",
+            "cover_auto_paused": True,
+            "cover_override_until": 1751700000.0,
+        }
+    }
+    mock_coordinator.async_request_refresh = AsyncMock()
+    ws_hass.data[DOMAIN]["coordinator"] = mock_coordinator
+
+    list_msg = {"id": 3, "type": "roommind/rooms/list"}
+    await _list_rooms(ws_hass, connection, list_msg)
+
+    connection.send_result.assert_called_once()
+    live = connection.send_result.call_args[0][1]["rooms"]["schlafzimmer"]["live"]
+    assert live["cover_auto_paused"] is True
+    assert live["cover_override_until"] == 1751700000.0
 
 
 @pytest.mark.asyncio
@@ -1572,14 +1749,14 @@ async def test_analytics_model_has_occupancy_sensors_false(ws_hass, store, conne
 
 
 def test_register_websocket_commands(hass):
-    """async_register_websocket_commands registers all 11 commands."""
+    """async_register_websocket_commands registers all 13 commands."""
     from unittest.mock import patch
 
     from custom_components.roommind.websocket_api import async_register_websocket_commands
 
     with patch("custom_components.roommind.websocket_api.websocket_api.async_register_command") as mock_reg:
         async_register_websocket_commands(hass)
-        assert mock_reg.call_count == 12
+        assert mock_reg.call_count == 13
 
 
 # ---------------------------------------------------------------------------
@@ -1690,7 +1867,8 @@ async def test_override_set_boost_cool_only_uses_comfort_cool(ws_hass, store, co
     await _override_set(ws_hass, connection, msg)
 
     room = store.get_room("room1")
-    assert room["override_temp"] == 26.0
+    assert room["override_heat"] is None
+    assert room["override_cool"] == 26.0
 
 
 @pytest.mark.asyncio
@@ -1710,7 +1888,8 @@ async def test_override_set_eco_cool_only_uses_eco_cool(ws_hass, store, connecti
     await _override_set(ws_hass, connection, msg)
 
     room = store.get_room("room1")
-    assert room["override_temp"] == 29.0
+    assert room["override_heat"] is None
+    assert room["override_cool"] == 29.0
 
 
 @pytest.mark.asyncio
@@ -2592,3 +2771,27 @@ async def test_get_diagnostics_no_config_entry(ws_hass, store, connection):
 
     connection.send_error.assert_called_once()
     assert connection.send_error.call_args[0][1] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_covers_clear_override_unknown_room(ws_hass, store, connection):
+    await store.async_load()
+    msg = {"id": 7, "type": "roommind/covers/clear_override", "area_id": "nope"}
+    await _covers_clear_override(ws_hass, connection, msg)
+    connection.send_error.assert_called_once()
+    assert connection.send_error.call_args[0][1] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_covers_clear_override_success(ws_hass, store, connection):
+    await store.async_load()
+    await store.async_save_room("lr", {"covers": ["cover.lr"]})
+    coordinator = MagicMock()
+    coordinator.clear_cover_override = MagicMock()
+    coordinator.async_request_refresh = AsyncMock()
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+    msg = {"id": 8, "type": "roommind/covers/clear_override", "area_id": "lr"}
+    await _covers_clear_override(ws_hass, connection, msg)
+    coordinator.clear_cover_override.assert_called_once_with("lr")
+    coordinator.async_request_refresh.assert_awaited_once()
+    connection.send_result.assert_called_once_with(8, {"success": True})

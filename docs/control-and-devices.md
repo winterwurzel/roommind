@@ -106,6 +106,17 @@ RoomMind keeps the TRV in its current heating mode but lowers the setpoint to th
 
 Useful for battery-powered Zigbee TRVs that enter deep sleep when set to `off` and then stop reacting to commands. `Low` keeps the valve responsive while effectively stopping heating.
 
+## When "Turn off devices" Overrides `When idle`
+
+`When idle` describes what a device should do while the room simply has no heating or cooling demand. It does **not** apply when you explicitly shut a room down via:
+
+- `Settings → Control → Action when schedule is off` set to `Turn off devices`
+- `Settings → Presence → Action when away` set to `Turn off devices`
+
+In those cases RoomMind turns the devices off even if `When idle` is set to `Fan only` or `Setback`. Otherwise an AC would keep circulating air after the schedule ended.
+
+The single exception is `Low` on thermostats: it stays active because the affected TRVs stop responding after being set to `off`. Lowering the setpoint to the device minimum already stops all heat output.
+
 ## Smart Source Selection
 
 `Smart source selection` only appears when a room has:

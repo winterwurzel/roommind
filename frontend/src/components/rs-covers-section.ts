@@ -23,6 +23,7 @@ export class RsCoverSection extends LitElement {
   @property({ type: Number }) public minPosition = 0;
   @property({ type: Number }) public overrideMinutes = 60;
   @property({ type: Boolean }) public autoPaused = false;
+  @property({ type: Number }) public overrideUntil: number | null = null;
   @property({ attribute: false }) public coverSchedules: CoverScheduleEntry[] = [];
   @property({ type: String }) public coverScheduleSelectorEntity = "";
   @property({ type: Number }) public activeCoverScheduleIndex = -1;
@@ -213,6 +214,7 @@ export class RsCoverSection extends LitElement {
       .status-hint {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 6px;
         color: var(--secondary-text-color);
         font-size: 0.85em;
@@ -366,7 +368,16 @@ export class RsCoverSection extends LitElement {
         ? html`
             <div class="status-hint paused">
               <ha-icon icon="mdi:hand-back-right"></ha-icon>
-              <span>${localize("covers.auto_paused", l)}</span>
+              <span>
+                ${this.overrideUntil
+                  ? `${localize("covers.auto_paused_until", l)} ${new Date(
+                      this.overrideUntil * 1000,
+                    ).toLocaleTimeString(l, { hour: "2-digit", minute: "2-digit" })}`
+                  : localize("covers.auto_paused", l)}
+              </span>
+              <ha-button @click=${this._onResumeAuto}
+                >${localize("covers.resume_auto", l)}</ha-button
+              >
             </div>
           `
         : this.autoEnabled
@@ -782,6 +793,10 @@ export class RsCoverSection extends LitElement {
         composed: true,
       }),
     );
+  }
+
+  private _onResumeAuto() {
+    this.dispatchEvent(new CustomEvent("cover-resume-auto", { bubbles: true, composed: true }));
   }
 
   private _emit(key: string, value: unknown) {

@@ -37,6 +37,7 @@ from ..utils.device_utils import (
     DEFAULT_IDLE_SETBACK_OFFSET,
     IDLE_ACTION_FAN_ONLY,
     IDLE_ACTION_LOW,
+    IDLE_ACTION_OFF,
     IDLE_ACTION_SETBACK,
     get_ac_eids,
     get_direct_setpoint_eids,
@@ -374,6 +375,7 @@ async def async_idle_device(
     *,
     area_id: str = "unknown",
     targets: TargetTemps | None = None,
+    force_off: bool = False,
 ) -> None:
     """Idle a climate device per its configured idle_action.
 
@@ -382,8 +384,18 @@ async def async_idle_device(
     "setback"  -> keep current hvac_mode, shift target by offset
     "low"      -> lower setpoint to device min_temp, never send set_hvac_mode(off)
     Falls back to off when the configured action is not applicable.
+
+    ``force_off`` marks an explicit user request to shut the room down
+    (schedule_off_action / presence_away_action = "off").  It outranks the
+    per-device idle_action, which only expresses "no heat/cool demand right
+    now" — e.g. fan_only would keep an AC circulating air after the schedule
+    ended (#368).  IDLE_ACTION_LOW is exempt: it exists because some battery
+    Zigbee TRVs enter deep sleep in hvac_mode=off and lose later wake-up
+    commands (#183), and lowering to min_temp already stops all heat output.
     """
     idle_action, idle_fan_mode = get_idle_action(devices, entity_id)
+    if force_off and idle_action != IDLE_ACTION_LOW:
+        idle_action = IDLE_ACTION_OFF
 
     # Fallback low setpoint (in HA display units) for devices where min_temp
     # is not effective (e.g. Wavin Sentio with min_temp=0 or high min_temp).
@@ -750,6 +762,7 @@ class MPCController:
         self._shading_factor = shading_factor
         self.q_occupancy = q_occupancy
         self._idle_targets: TargetTemps | None = None
+        self._force_off = False
 
         s = settings or {}
         self.outdoor_cooling_min = s.get("outdoor_cooling_min", DEFAULT_OUTDOOR_COOLING_MIN)
@@ -1215,8 +1228,15 @@ class MPCController:
         heat_source_plan: HeatSourcePlan | None = None,
         compressor_forced_on: set[str] | None = None,
         compressor_forced_off: set[str] | None = None,
+        force_off: bool = False,
     ) -> None:
-        """Apply the determined mode with proportional valve control."""
+        """Apply the determined mode with proportional valve control.
+
+        ``force_off`` signals that the room was shut down on purpose
+        (schedule_off_action / presence_away_action = "off") rather than merely
+        having no demand, so per-device idle_action must not keep devices
+        running (#368).
+        """
         _forced_on = compressor_forced_on or set()
         _forced_off = compressor_forced_off or set()
 
@@ -1232,6 +1252,7 @@ class MPCController:
         # Store targets for _call delegation (setback idle_action) — must be
         # after backward-compat conversion so legacy callers get a TargetTemps.
         self._idle_targets = targets
+        self._force_off = force_off
 
         # Resolve effective target_temp for the current mode
         if mode == MODE_HEATING:
@@ -1613,7 +1634,14 @@ class MPCController:
                         eid,
                     )
                     continue
-                await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
+                await async_idle_device(
+                    self.hass,
+                    eid,
+                    self._devices,
+                    area_id=self._area_id,
+                    targets=targets,
+                    force_off=force_off,
+                )
 
     def _proportional_deadband(self, eid: str, current_temp: float | None, effective_target: float) -> float | None:
         """Deadband threshold for a proportional setpoint send, or None to disable.
@@ -1636,7 +1664,14 @@ class MPCController:
 
         # Delegate "turn off" to fallback-aware helper (handles heat-only TRVs)
         if service == "set_hvac_mode" and data.get("hvac_mode") == "off" and eid:
-            await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=self._idle_targets)
+            await async_idle_device(
+                self.hass,
+                eid,
+                self._devices,
+                area_id=self._area_id,
+                targets=self._idle_targets,
+                force_off=self._force_off,
+            )
             return
 
         # Resolve hvac_mode to a supported mode (handles auto-only devices)

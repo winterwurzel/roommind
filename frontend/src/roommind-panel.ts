@@ -457,6 +457,10 @@ export class RoomMindPanel extends LitElement {
   }
 
   private _renderAreas() {
+    if (!this._roomsLoaded) {
+      return html`<div class="loading">${localize("panel.loading", this.hass.language)}</div>`;
+    }
+
     if (this._selectedAreaId) {
       const area = this.hass?.areas?.[this._selectedAreaId];
       if (area) {
@@ -476,10 +480,6 @@ export class RoomMindPanel extends LitElement {
         `;
       }
       this._selectedAreaId = null;
-    }
-
-    if (!this._roomsLoaded) {
-      return html`<div class="loading">${localize("panel.loading", this.hass.language)}</div>`;
     }
 
     const allAreaInfos = this._areaInfosCache;

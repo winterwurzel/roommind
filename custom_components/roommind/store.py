@@ -45,9 +45,31 @@ def _migrate_room_temps(room: dict) -> dict:
     return room
 
 
+def _migrate_override_fields(room: dict) -> dict:
+    """Migrate legacy single override_temp to split override_heat/override_cool."""
+    if "override_temp" not in room:
+        return room
+    legacy = room.pop("override_temp")
+    if legacy is None or room.get("override_heat") is not None or room.get("override_cool") is not None:
+        return room
+    climate_mode = room.get("climate_mode", "auto")
+    legacy = float(legacy)
+    if climate_mode == "cool_only":
+        room["override_heat"] = None
+        room["override_cool"] = legacy
+    elif climate_mode == "heat_only":
+        room["override_heat"] = legacy
+        room["override_cool"] = None
+    else:
+        room["override_heat"] = legacy
+        room["override_cool"] = max(legacy, room.get("comfort_cool", DEFAULT_COMFORT_COOL))
+    return room
+
+
 def _migrate_room(room: dict) -> dict:
     """Apply all read-time migrations (safety net)."""
     _migrate_room_temps(room)
+    _migrate_override_fields(room)
     migrate_heat_pump_devices(room.get("devices", []))
     ensure_room_has_devices(room)
     return room
@@ -80,6 +102,7 @@ class RoomMindStore:
         # One-time migrations (combined into single pass + single save)
         device_migrated = 0
         hp_migrated = 0
+        override_migrated = 0
         for room in self._data.values():
             if "devices" not in room:
                 ensure_room_has_devices(room)
@@ -89,13 +112,19 @@ class RoomMindStore:
                 room["thermostats"] = t
                 room["acs"] = a
                 hp_migrated += 1
+            if "override_temp" in room:
+                _migrate_room_temps(room)
+                _migrate_override_fields(room)
+                override_migrated += 1
         orphan_settings_removed = [k for k in _ORPHAN_SETTINGS_KEYS if self._settings.pop(k, None) is not None]
-        if device_migrated or hp_migrated or orphan_settings_removed:
+        if device_migrated or hp_migrated or override_migrated or orphan_settings_removed:
             await self._async_save()
         if device_migrated:
             _LOGGER.info("Migrated %d room(s) to unified device model", device_migrated)
         if hp_migrated:
             _LOGGER.info("Migrated %d room(s) from heat_pump to ac device type", hp_migrated)
+        if override_migrated:
+            _LOGGER.info("Migrated %d room(s) to split override heat/cool", override_migrated)
         if orphan_settings_removed:
             _LOGGER.info("Removed orphan setting(s): %s", ", ".join(orphan_settings_removed))
 

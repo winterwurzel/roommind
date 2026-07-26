@@ -1161,3 +1161,204 @@ async def test_mpc_apply_call_hvac_off_delegates_setback():
         and c[0][2].get("hvac_mode") == "off"
     ]
     assert len(trv_off) == 0
+
+
+# ---------------------------------------------------------------------------
+# force_off overrides idle_action (#368)
+#
+# schedule_off_action / presence_away_action = "off" is an explicit shutdown
+# request and must outrank the per-device idle_action.  IDLE_ACTION_LOW stays
+# exempt because hvac_mode=off would deep-sleep battery Zigbee TRVs (#183).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_idle_device_force_off_overrides_fan_only():
+    """force_off turns a fan_only device off instead of keeping the fan running."""
+    clear_command_cache()
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "cool"
+    state.attributes = {
+        "hvac_modes": ["cool", "fan_only", "off"],
+        "fan_modes": ["low", "medium", "high"],
+        "temperature": 23.0,
+    }
+    hass.states.get = MagicMock(return_value=state)
+
+    devices = [
+        {"entity_id": "climate.ac1", "type": "ac", "role": "auto", "idle_action": "fan_only", "idle_fan_mode": "low"}
+    ]
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room", force_off=True)
+
+    calls = hass.services.async_call.call_args_list
+    assert any(c[0][1] == "set_hvac_mode" and c[0][2].get("hvac_mode") == "off" for c in calls)
+    assert not any(c[0][2].get("hvac_mode") == "fan_only" for c in calls if c[0][1] == "set_hvac_mode")
+    assert not any(c[0][1] == "set_fan_mode" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_async_idle_device_force_off_overrides_setback():
+    """force_off turns a setback device off even when heat/cool targets exist."""
+    clear_command_cache()
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {
+        "hvac_modes": ["heat", "off"],
+        "min_temp": 5.0,
+        "max_temp": 30.0,
+        "temperature": 21.0,
+    }
+    hass.states.get = MagicMock(return_value=state)
+
+    devices = [
+        {"entity_id": "climate.trv1", "type": "trv", "role": "auto", "idle_action": "setback", "idle_fan_mode": ""}
+    ]
+    await async_idle_device(
+        hass,
+        "climate.trv1",
+        devices,
+        area_id="living_room",
+        targets=TargetTemps(heat=21.0, cool=24.0),
+        force_off=True,
+    )
+
+    calls = hass.services.async_call.call_args_list
+    assert any(c[0][1] == "set_hvac_mode" and c[0][2].get("hvac_mode") == "off" for c in calls)
+    # Setback would have sent 19.0 (21 - 2); the off path lowers to min_temp instead.
+    assert not any(c[0][1] == "set_temperature" and c[0][2].get("temperature") == 19.0 for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_async_idle_device_force_off_keeps_low_exempt():
+    """force_off does NOT send hvac_mode=off for idle_action='low' (#183 deep sleep)."""
+    clear_command_cache()
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {
+        "hvac_modes": ["heat", "off"],
+        "min_temp": 5.0,
+        "max_temp": 35.0,
+        "temperature": 21.0,
+    }
+    hass.states.get = MagicMock(return_value=state)
+
+    devices = [{"entity_id": "climate.trv1", "type": "trv", "role": "auto", "idle_action": "low", "idle_fan_mode": ""}]
+    await async_idle_device(hass, "climate.trv1", devices, area_id="living_room", force_off=True)
+
+    calls = hass.services.async_call.call_args_list
+    temp_calls = [c for c in calls if c[0][1] == "set_temperature"]
+    assert len(temp_calls) == 1
+    assert temp_calls[0][0][2]["temperature"] == 5.0
+    assert not any(c[0][1] == "set_hvac_mode" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_async_idle_device_without_force_off_keeps_fan_only():
+    """Default force_off=False keeps the existing fan_only behavior (regression guard)."""
+    clear_command_cache()
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "cool"
+    state.attributes = {
+        "hvac_modes": ["cool", "fan_only", "off"],
+        "fan_modes": ["low"],
+        "temperature": 23.0,
+    }
+    hass.states.get = MagicMock(return_value=state)
+
+    devices = [
+        {"entity_id": "climate.ac1", "type": "ac", "role": "auto", "idle_action": "fan_only", "idle_fan_mode": "low"}
+    ]
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room", force_off=False)
+
+    calls = hass.services.async_call.call_args_list
+    assert any(c[0][1] == "set_hvac_mode" and c[0][2].get("hvac_mode") == "fan_only" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_mpc_apply_idle_force_off_overrides_fan_only():
+    """async_apply(MODE_IDLE, force_off=True) turns a fan_only AC off."""
+    clear_command_cache()
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "cool"
+    state.attributes = {
+        "hvac_modes": ["cool", "fan_only", "off"],
+        "fan_modes": ["low", "medium", "high"],
+        "temperature": 23.0,
+    }
+    hass.states.get = MagicMock(return_value=state)
+
+    room = make_room(thermostats=[], acs=["climate.ac1"])
+    room["devices"] = [
+        {
+            "entity_id": "climate.ac1",
+            "type": "ac",
+            "role": "auto",
+            "heating_system_type": "",
+            "idle_action": "fan_only",
+            "idle_fan_mode": "low",
+        }
+    ]
+    model_mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=model_mgr,
+        outdoor_temp=30.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply(MODE_IDLE, TargetTemps(heat=None, cool=None), force_off=True)
+
+    calls = hass.services.async_call.call_args_list
+    assert any(c[0][1] == "set_hvac_mode" and c[0][2].get("hvac_mode") == "off" for c in calls)
+    assert not any(c[0][1] == "set_hvac_mode" and c[0][2].get("hvac_mode") == "fan_only" for c in calls)
+    assert not any(c[0][1] == "set_fan_mode" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_mpc_apply_idle_force_off_keeps_low_exempt():
+    """async_apply(MODE_IDLE, force_off=True) leaves an idle_action='low' TRV out of off-mode."""
+    clear_command_cache()
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {
+        "hvac_modes": ["heat", "off"],
+        "min_temp": 5.0,
+        "max_temp": 30.0,
+        "temperature": 21.0,
+    }
+    hass.states.get = MagicMock(return_value=state)
+
+    room = make_room(thermostats=["climate.trv1"], acs=[])
+    room["devices"] = [
+        {
+            "entity_id": "climate.trv1",
+            "type": "trv",
+            "role": "auto",
+            "heating_system_type": "",
+            "idle_action": "low",
+            "idle_fan_mode": "",
+        }
+    ]
+    model_mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=model_mgr,
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply(MODE_IDLE, TargetTemps(heat=None, cool=None), force_off=True)
+
+    calls = hass.services.async_call.call_args_list
+    assert not any(c[0][1] == "set_hvac_mode" for c in calls)
+    temp_calls = [c for c in calls if c[0][1] == "set_temperature"]
+    assert len(temp_calls) == 1
+    assert temp_calls[0][0][2]["temperature"] == 5.0

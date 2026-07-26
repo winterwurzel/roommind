@@ -17,11 +17,13 @@ export class RsOverrideSection extends LitElement {
   @property() public language = "en";
 
   @state() private _overridePending: OverrideType | null = null;
-  @state() private _overrideCustomTemp = 21;
+  @state() private _overrideCustomHeat = 21;
+  @state() private _overrideCustomCool = 24;
   @state() private _overrideError = "";
   @state() private _optimisticOverride: {
     type: OverrideType;
-    temp: number;
+    heat: number | null;
+    cool: number | null;
     until: number | null;
   } | null = null;
   @state() private _optimisticClear = false;
@@ -182,17 +184,19 @@ export class RsOverrideSection extends LitElement {
   getEffectiveOverride(): {
     active: boolean;
     type: OverrideType | null;
-    temp: number | null;
+    heat: number | null;
+    cool: number | null;
     until: number | null;
   } {
     if (this._optimisticClear) {
-      return { active: false, type: null, temp: null, until: null };
+      return { active: false, type: null, heat: null, cool: null, until: null };
     }
     if (this._optimisticOverride) {
       return {
         active: true,
         type: this._optimisticOverride.type,
-        temp: this._optimisticOverride.temp,
+        heat: this._optimisticOverride.heat,
+        cool: this._optimisticOverride.cool,
         until: this._optimisticOverride.until,
       };
     }
@@ -201,11 +205,12 @@ export class RsOverrideSection extends LitElement {
       return {
         active: true,
         type: live.override_type,
-        temp: live.override_temp,
+        heat: live.override_heat,
+        cool: live.override_cool,
         until: live.override_until,
       };
     }
-    return { active: false, type: null, temp: null, until: null };
+    return { active: false, type: null, heat: null, cool: null, until: null };
   }
 
   render() {
@@ -252,21 +257,7 @@ export class RsOverrideSection extends LitElement {
       </div>
       ${showDuration
         ? html`
-            ${this._overridePending === "custom"
-              ? html`
-                  <ha-textfield
-                    class="override-target"
-                    type="number"
-                    .label=${localize("override.target", this.language)}
-                    .suffix=${tempUnit(this.hass)}
-                    min=${tempRange(5, 35, this.hass).min}
-                    max=${tempRange(5, 35, this.hass).max}
-                    step=${tempStep(this.hass)}
-                    .value=${String(toDisplay(this._overrideCustomTemp, this.hass))}
-                    @input=${this._onOverrideCustomTempInput}
-                  ></ha-textfield>
-                `
-              : nothing}
+            ${this._overridePending === "custom" ? this._renderCustomInputs() : nothing}
             <div class="override-duration">
               <span class="override-duration-label"
                 >${localize("override.activate_for", this.language)}</span
@@ -293,22 +284,68 @@ export class RsOverrideSection extends LitElement {
     `;
   }
 
+  private _renderCustomInputs() {
+    const range = tempRange(5, 35, this.hass);
+    const heatField = html`
+      <ha-textfield
+        class="override-target"
+        type="number"
+        .label=${localize(
+          this.climateMode === "auto" ? "override.heat_to" : "override.target",
+          this.language,
+        )}
+        .suffix=${tempUnit(this.hass)}
+        min=${range.min}
+        max=${range.max}
+        step=${tempStep(this.hass)}
+        .value=${String(toDisplay(this._overrideCustomHeat, this.hass))}
+        @input=${this._onCustomHeatInput}
+      ></ha-textfield>
+    `;
+    const coolField = html`
+      <ha-textfield
+        class="override-target"
+        type="number"
+        .label=${localize(
+          this.climateMode === "auto" ? "override.cool_above" : "override.target",
+          this.language,
+        )}
+        .suffix=${tempUnit(this.hass)}
+        min=${range.min}
+        max=${range.max}
+        step=${tempStep(this.hass)}
+        .value=${String(toDisplay(this._overrideCustomCool, this.hass))}
+        @input=${this._onCustomCoolInput}
+      ></ha-textfield>
+    `;
+    if (this.climateMode === "heat_only") return heatField;
+    if (this.climateMode === "cool_only") return coolField;
+    return html`${heatField} ${coolField}`;
+  }
+
   private _onOverridePreset(type: OverrideType): void {
     if (this._overridePending === type) {
       this._overridePending = null;
     } else {
       this._overridePending = type;
       if (type === "custom") {
-        this._overrideCustomTemp =
-          this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat;
+        this._overrideCustomHeat = this.comfortHeat;
+        this._overrideCustomCool = this.comfortCool;
       }
     }
     this._overrideError = "";
   }
 
-  private _onOverrideCustomTempInput(e: Event): void {
-    this._overrideCustomTemp = toCelsius(
+  private _onCustomHeatInput(e: Event): void {
+    this._overrideCustomHeat = toCelsius(
       Number((e.target as HTMLInputElement).value) || toDisplay(21, this.hass),
+      this.hass,
+    );
+  }
+
+  private _onCustomCoolInput(e: Event): void {
+    this._overrideCustomCool = toCelsius(
+      Number((e.target as HTMLInputElement).value) || toDisplay(24, this.hass),
       this.hass,
     );
   }
@@ -317,18 +354,30 @@ export class RsOverrideSection extends LitElement {
     if (!this._overridePending || !this.config) return;
 
     const pendingType = this._overridePending;
-    let temp: number;
+    let heat: number | null;
+    let cool: number | null;
     if (pendingType === "boost") {
-      temp = this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat;
+      heat = this.comfortHeat;
+      cool = this.comfortCool;
     } else if (pendingType === "eco") {
-      temp = this.climateMode === "cool_only" ? this.ecoCool : this.ecoHeat;
+      heat = this.ecoHeat;
+      cool = this.ecoCool;
     } else {
-      temp = this._overrideCustomTemp;
+      heat = this._overrideCustomHeat;
+      cool = this._overrideCustomCool;
+    }
+    if (this.climateMode === "heat_only") cool = null;
+    if (this.climateMode === "cool_only") heat = null;
+
+    if (heat != null && cool != null && cool < heat) {
+      this._overrideError = localize("override.invalid_band", this.language);
+      return;
     }
 
     this._optimisticOverride = {
       type: pendingType,
-      temp,
+      heat,
+      cool,
       until: Date.now() / 1000 + hours * 3600,
     };
     this._optimisticClear = false;
@@ -342,7 +391,8 @@ export class RsOverrideSection extends LitElement {
       duration: hours,
     };
     if (pendingType === "custom") {
-      msg.temperature = temp;
+      if (this.climateMode !== "cool_only") msg.heat = this._overrideCustomHeat;
+      if (this.climateMode !== "heat_only") msg.cool = this._overrideCustomCool;
     }
 
     try {

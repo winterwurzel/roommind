@@ -192,3 +192,73 @@ class TestCoverageGaps:
             await coordinator.async_room_removed("test_room")
 
         mock_history_store.remove_room.assert_called_once_with("test_room")
+
+    def test_cleanup_keeps_entities_when_area_id_is_prefix_of_another(self, hass, mock_config_entry):
+        """A shorter area_id must not claim a longer room's entities (#340).
+
+        Rooms ``bedroom`` and ``bedroom_2_l`` coexist. The entity
+        ``roommind_bedroom_2_l_override`` must survive cleanup — previously the
+        prefix match against ``bedroom`` deleted it.
+        """
+        from custom_components.roommind.const import DOMAIN
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        store = MagicMock()
+        store.get_rooms.return_value = {"bedroom": {}, "bedroom_2_l": {}}
+        hass.data = {DOMAIN: {"store": store}}
+
+        entries = []
+        for area in ("bedroom", "bedroom_2_l"):
+            for suffix, domain in (
+                ("target_temp", "sensor"),
+                ("mode", "sensor"),
+                ("override", "climate"),
+                ("climate_control", "switch"),
+            ):
+                e = MagicMock()
+                e.unique_id = f"{DOMAIN}_{area}_{suffix}"
+                e.entity_id = f"{domain}.{DOMAIN}_{area}_{suffix}"
+                entries.append(e)
+
+        mock_registry = MagicMock()
+        mock_registry.entities.values.return_value = entries
+
+        with patch(
+            "homeassistant.helpers.entity_registry.async_get",
+            return_value=mock_registry,
+        ):
+            coordinator.cleanup_orphaned_entities()
+
+        # Nothing removed — every entity is owned by an existing room.
+        mock_registry.async_remove.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_room_removed_does_not_remove_prefix_sibling_entities(self, hass, mock_config_entry):
+        """Removing ``bedroom`` must not delete ``bedroom_2_l`` entities (#340)."""
+        from custom_components.roommind.const import DOMAIN
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator._history_store = None
+
+        entry_bedroom = MagicMock()
+        entry_bedroom.unique_id = f"{DOMAIN}_bedroom_override"
+        entry_bedroom.entity_id = "climate.roommind_bedroom_override"
+
+        entry_sibling = MagicMock()
+        entry_sibling.unique_id = f"{DOMAIN}_bedroom_2_l_override"
+        entry_sibling.entity_id = "climate.roommind_bedroom_2_l_override"
+
+        mock_registry = MagicMock()
+        mock_registry.entities.values.return_value = [entry_bedroom, entry_sibling]
+
+        with patch(
+            "homeassistant.helpers.entity_registry.async_get",
+            return_value=mock_registry,
+        ):
+            await coordinator.async_room_removed("bedroom")
+
+        removed_ids = [c.args[0] for c in mock_registry.async_remove.call_args_list]
+        assert "climate.roommind_bedroom_override" in removed_ids
+        assert "climate.roommind_bedroom_2_l_override" not in removed_ids

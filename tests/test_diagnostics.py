@@ -434,6 +434,8 @@ async def test_diagnostics_cover_state_no_override(hass, mock_config_entry):
     cover_state.last_was_forced = False
     cover_state.last_change_ts = 0
     cover_state.user_override_until = 0
+    cover_state.owned = False
+    cover_state.baseline_position = None
 
     coordinator = _make_coordinator(cover_states={"room_a": cover_state})
     hass.data[DOMAIN] = {"store": store, "coordinator": coordinator}
@@ -443,6 +445,8 @@ async def test_diagnostics_cover_state_no_override(hass, mock_config_entry):
     cover = result["rooms"]["room_a"]["cover"]
     assert "user_override_remaining_s" not in cover
     assert "last_change_ago_s" not in cover
+    assert cover["owned"] is False
+    assert cover["baseline_position"] is None
 
 
 @pytest.mark.asyncio
@@ -466,7 +470,7 @@ async def test_diagnostics_compressor_groups(hass, mock_config_entry):
     store.get_settings.return_value = {}
     store.get_rooms.return_value = {}
 
-    now = time.time()
+    now = time.monotonic()
     group_cfg = MagicMock()
     group_cfg.min_run_seconds = 180
     group_cfg.min_off_seconds = 300
@@ -499,7 +503,7 @@ async def test_diagnostics_compressor_master_device(hass, mock_config_entry):
     store.get_settings.return_value = {}
     store.get_rooms.return_value = {}
 
-    now = time.time()
+    now = time.monotonic()
     group_cfg = MagicMock()
     group_cfg.min_run_seconds = 180
     group_cfg.min_off_seconds = 300
@@ -575,7 +579,7 @@ async def test_diagnostics_compressor_off_since(hass, mock_config_entry):
     store.get_settings.return_value = {}
     store.get_rooms.return_value = {}
 
-    now = time.time()
+    now = time.monotonic()
     group_cfg = MagicMock()
     group_cfg.min_run_seconds = 180
     group_cfg.min_off_seconds = 300

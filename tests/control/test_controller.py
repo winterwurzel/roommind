@@ -94,7 +94,7 @@ async def test_mpc_outdoor_gating():
 async def test_mpc_outdoor_gating_bypassed_by_override():
     """Override active → outdoor cooling gate bypassed, cooling proceeds."""
     hass = build_hass()
-    room = make_room(thermostats=[], acs=["climate.ac"], override_temp=22.0, override_until=None)
+    room = make_room(thermostats=[], acs=["climate.ac"], override_cool=22.0, override_until=None)
     model_mgr = RoomModelManager()
     ctrl = MPCController(
         hass,

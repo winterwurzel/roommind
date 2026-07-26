@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     DEFAULT_COMFORT_COOL,
@@ -27,7 +29,7 @@ def find_active_block(schedule_blocks: dict, ts: float) -> dict[str, Any] | None
     Returns the block's ``data`` dict, or None if no block matches.
     Caller must check ``schedule_blocks is None`` before calling.
     """
-    dt = datetime.fromtimestamp(ts)
+    dt = dt_util.as_local(datetime.fromtimestamp(ts, tz=UTC))
     day_name = dt.strftime("%A").lower()
     current_time = dt.time()
     day_blocks = schedule_blocks.get(day_name, [])
@@ -93,7 +95,8 @@ def resolve_targets_at_time(
     ts: float,
     schedule_blocks: dict | None,
     override_until: float | None,
-    override_temp: float | None,
+    override_heat: float | None,
+    override_cool: float | None,
     vacation_until: float | None,
     vacation_temp: float | None,
     comfort_heat: float,
@@ -110,11 +113,10 @@ def resolve_targets_at_time(
 
     Returns TargetTemps(heat, cool). None values mean "force off".
     """
-    # 1. Override — single-point target (skipped when presence-away suppresses it)
-    if override_temp is not None and (override_until is None or ts < override_until):
+    # 1. Override — split heat/cool dead-band (skipped when presence-away suppresses it)
+    if (override_heat is not None or override_cool is not None) and (override_until is None or ts < override_until):
         if not (presence_away and presence_clears_override):
-            t = float(override_temp)
-            return TargetTemps(heat=t, cool=t)
+            return TargetTemps(heat=override_heat, cool=override_cool)
     # 2. Vacation — heat setback, cooling stays at eco_cool
     if vacation_until is not None and ts < vacation_until and vacation_temp is not None:
         t = float(vacation_temp)
@@ -290,7 +292,8 @@ def make_target_resolver(
     eco_heat = room.get("eco_heat", room.get("eco_temp", DEFAULT_ECO_HEAT))
     eco_cool = room.get("eco_cool", DEFAULT_ECO_COOL)
     override_until = room.get("override_until")
-    override_temp = room.get("override_temp")
+    override_heat = room.get("override_heat")
+    override_cool = room.get("override_cool")
     vacation_until = settings.get("vacation_until")
     vacation_temp = settings.get("vacation_temp")
     presence_away_action = settings.get("presence_away_action", "eco")
@@ -309,7 +312,8 @@ def make_target_resolver(
             ts,
             schedule_blocks,
             override_until,
-            override_temp,
+            override_heat,
+            override_cool,
             vacation_until,
             vacation_temp,
             comfort_heat,

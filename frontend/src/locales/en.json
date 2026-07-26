@@ -7,11 +7,9 @@
   "panel.loading": "Loading...",
   "panel.no_areas": "No areas configured in Home Assistant.",
   "panel.no_areas_hint": "Add areas in HA settings to get started.",
-
   "badge.beta": "Beta",
   "badge.beta_hint": "This feature is in beta and may change or be restructured in future updates.",
   "common.learn_more": "Learn more",
-
   "panel.stat.rooms": "Rooms",
   "panel.stat.heating": "Heating",
   "panel.stat.cooling": "Cooling",
@@ -24,7 +22,6 @@
   "panel.floor_other": "Other",
   "panel.reorder": "Reorder rooms",
   "panel.reorder_done": "Done",
-
   "room.back": "Back to rooms",
   "room.section.climate_mode": "Climate Mode",
   "room.section.schedule": "Schedule & Temperatures",
@@ -51,21 +48,22 @@
   "room.error_save_fallback": "Failed to save configuration",
   "room.error_delete_fallback": "Failed to delete configuration",
   "room.climate_control_toggle": "Climate control",
-  "room.climate_control_hint": "When disabled, RoomMind will not control devices in this room",
+  "room.climate_control_hint": "When disabled, RoomMind stops controlling devices in this room. They keep their current settings and may continue heating or cooling on their own. RoomMind will not turn them off.",
   "room.outdoor_toggle": "Outdoor area",
   "room.outdoor_hint": "Disables climate control, mold detection, and model training. Sensor monitoring continues.",
   "room.alias.placeholder": "Custom display name",
   "room.alias.clear": "Reset to area name",
-
   "override.label": "Temporary Override",
   "override.comfort": "Comfort",
   "override.eco": "Eco",
   "override.custom": "Custom",
   "override.target": "Target:",
+  "override.heat_to": "Heat to:",
+  "override.cool_above": "Cool above:",
+  "override.invalid_band": "Cooling target must be at or above the heating target",
   "override.activate_for": "Activate for:",
   "override.error_set": "Failed to set override",
   "override.error_clear": "Failed to clear override",
-
   "hero.target": "Target",
   "hero.override": "Override",
   "hero.remaining": "{time} remaining",
@@ -79,7 +77,9 @@
   "hero.not_configured": "Not configured yet",
   "hero.mpc_learning_paused": "MPC learning paused",
   "hero.mpc_learning_paused.outdoor_unavailable": "RoomMind needs an outdoor temperature to learn this room's thermal model. The configured outdoor sensor is unavailable and no weather entity is set as a fallback. Configure either in Settings.",
-
+  "hero.compressor_protection_min_off": "Compressor protection: waiting for min-off",
+  "hero.compressor_protection_min_run": "Compressor protection: min-run active",
+  "hero.compressor_protection_info": "This room shares an outdoor compressor with other rooms. To prevent short-cycling, the shared compressor group enforces a minimum run time and a minimum off time before this device is allowed to switch again.",
   "card.target": "Target",
   "card.waiting": "Waiting for data...",
   "card.humidity": "{value}% humidity",
@@ -97,7 +97,6 @@
   "card.mpc_active": "MPC active",
   "card.mpc_learning": "MPC learning",
   "card.not_controlled": "Not controlled by RoomMind",
-
   "mode.auto": "Auto",
   "mode.auto_desc": "Heats & cools automatically based on target temperature",
   "mode.heat_only": "Heat Only",
@@ -107,7 +106,6 @@
   "mode.heating": "Heating",
   "mode.cooling": "Cooling",
   "mode.idle": "Standby",
-
   "schedule.add_schedule": "Add schedule",
   "schedule.select_schedule": "Select schedule helper",
   "schedule.create_helper_hint": "Create new schedule helper in HA settings",
@@ -130,10 +128,10 @@
   "schedule.help_header": "How do schedules work?",
   "schedule.help_temps_title": "How is the target temperature determined?",
   "schedule.help_temps": "The target temperature follows this priority chain:",
-  "schedule.help_temps_1": "<strong>Manual override</strong> \u2013 A temporary boost/eco/custom override always takes highest priority.",
-  "schedule.help_temps_2": "<strong>Block temperature</strong> \u2013 If the active schedule block has a <code>temperature</code> value in its data, that value is used.",
-  "schedule.help_temps_3": "<strong>Comfort temperature</strong> \u2013 If the schedule is \"on\" but the block has no temperature, the comfort fallback temperature below is used.",
-  "schedule.help_temps_4": "<strong>Eco temperature</strong> \u2013 When the schedule is \"off\" (outside all time blocks), the eco temperature is used.",
+  "schedule.help_temps_1": "<strong>Manual override</strong> – A temporary boost/eco/custom override always takes highest priority.",
+  "schedule.help_temps_2": "<strong>Block temperature</strong> – If the active schedule block has a <code>temperature</code> value in its data, that value is used.",
+  "schedule.help_temps_3": "<strong>Comfort temperature</strong> – If the schedule is \"on\" but the block has no temperature, the comfort fallback temperature below is used.",
+  "schedule.help_temps_4": "<strong>Eco temperature</strong> – When the schedule is \"off\" (outside all time blocks), the eco temperature is used.",
   "schedule.help_block_title": "Setting temperature per time block",
   "schedule.help_block": "You can set a specific temperature for each time block by adding a <code>temperature</code> value in the schedule's YAML configuration:",
   "schedule.help_block_note": "If a block has no <code>temperature</code> data, the comfort fallback temperature is used instead.",
@@ -156,7 +154,6 @@
   "schedule.from_schedule_split": "{heat}{unit} / {cool}{unit} from schedule",
   "schedule.fallback": "{temp}{unit} (fallback)",
   "schedule.eco_detail": "{temp}{unit} (eco)",
-
   "devices.climate_entities": "Climate entities",
   "devices.temp_sensors": "Temperature sensors",
   "devices.humidity_sensors": "Humidity sensors",
@@ -206,10 +203,8 @@
   "devices.info.modes_body": "When idle only applies to Climate Devices. Turn off powers the device down. Fan only keeps airflow without heating or cooling. Setback keeps the current mode active but moves the target 2°C away from the room target. This setback offset is currently fixed. For Thermostats, Low keeps the TRV active at its minimum setpoint instead of off, useful for battery-powered Zigbee TRVs that sleep when set to off.",
   "devices.info.heat_source_title": "Smart source selection",
   "devices.info.heat_source_body": "This appears only when a room has both a thermostat/TRV and a Climate Device plus an external temperature sensor. RoomMind can then choose which source should handle heating based on temperature gap and outdoor conditions.",
-
   "hero.window_open": "Window open – paused",
   "card.window_open": "Window open",
-
   "room.section.covers": "Covers & Blinds",
   "covers.section_title": "Covers & Blinds",
   "covers.auto_control": "Automatic blind control",
@@ -225,6 +220,8 @@
   "covers.add_cover": "Add cover entity...",
   "covers.shading_active": "Shading active",
   "covers.auto_paused": "Auto paused (manual override)",
+  "covers.auto_paused_until": "Auto control paused until",
+  "covers.resume_auto": "Resume automatic control",
   "covers.done": "Done",
   "covers.night_close": "Close at night",
   "covers.night_close_hint": "Automatically close covers at sunset and open at sunrise.",
@@ -296,11 +293,10 @@
   "covers.orientation_SW_full": "Southwest",
   "covers.orientation_W_full": "West",
   "covers.orientation_NW_full": "Northwest",
-
   "settings.general_title": "General",
   "settings.group_by_floor": "Group rooms by floor",
   "settings.climate_control_active": "Climate control active",
-  "settings.climate_control_hint": "When disabled, RoomMind continues to monitor all sensors and train the model, but will not send any commands to your heating or cooling devices.",
+  "settings.climate_control_hint": "When disabled, RoomMind continues to monitor all sensors and train the model, but sends no commands to your heating or cooling devices. Your devices keep their current mode and setpoint and may continue heating or cooling on their own. RoomMind will not turn them off.",
   "settings.learning_title": "Model Training",
   "settings.learning_hint": "When paused, RoomMind stops collecting new measurement data and training the thermal model. Existing model data is preserved.",
   "settings.learning_exceptions": "Exceptions",
@@ -324,9 +320,7 @@
   "settings.saving": "Saving...",
   "settings.saved": "Saved",
   "settings.error": "Error saving",
-
   "devices.using_builtin_sensor": "Using thermostat's built-in sensor",
-
   "settings.climate_intelligence": "Climate Intelligence",
   "settings.control_mode": "Control Mode",
   "settings.control_mode_simple": "Simple (Bang-Bang)",
@@ -342,7 +336,6 @@
   "settings.outdoor_unavailable_notify_hint": "Show a Home Assistant notification when neither the outdoor sensor nor the weather entity has reported a temperature for 30 minutes. While this is the case, RoomMind pauses thermal model learning to avoid corruption.",
   "settings.prediction_enabled": "Temperature prediction",
   "settings.prediction_enabled_hint": "Show predicted temperature trend in analytics charts. Disable if you experience slow performance.",
-
   "vacation.title": "Vacation Mode",
   "vacation.hint": "Sets all rooms to a setback temperature until the end date.",
   "vacation.active_label": "Vacation mode active",
@@ -350,7 +343,6 @@
   "vacation.setback_temp": "Setback temperature",
   "vacation.no_end_date": "No end date",
   "vacation.deactivate": "Deactivate",
-
   "tabs.analytics": "Analytics",
   "analytics.select_room": "Select Room",
   "analytics.temperature": "Temperature",
@@ -424,7 +416,6 @@
   "analytics.range_from": "From",
   "analytics.range_to": "To",
   "analytics.chart_info_body": "**Lines:** The solid orange line shows the measured room temperature. The green dashed line is the target temperature from your schedule. The blue dotted line is the model's temperature prediction.\n\n**Shaded areas:** Red shading marks heating periods, blue marks cooling, and teal marks times when a window was open.\n\n**Future forecast (right of the 'now' line):** The green dashed line shows the upcoming schedule targets for the next 3 hours. The blue dotted line shows the predicted temperature trend.\n\n**Prediction modes:** When 'MPC active' is shown, the prediction uses the full MPC optimizer with intelligent pre-heating/pre-cooling. While the model is still learning, a simpler simulation is used.\n\n**Limitations:** The prediction assumes current conditions stay constant (outdoor temperature, window state). The simulation accuracy depends on how well the thermal model has learned your room — early on, predictions may be less accurate. Once MPC activates, predictions become significantly more reliable.",
-
   "presence.title": "Presence Detection",
   "presence.hint": "Uses eco temperature when nobody is home.",
   "presence.hint_detail": "When enabled, all rooms switch to eco temperature as soon as none of the configured persons are home. You can optionally restrict per room which persons are relevant.",
@@ -448,13 +439,11 @@
   "presence.clears_override_label": "Absence stops override",
   "presence.clears_override_hint": "When nobody is home, manual overrides are paused and the room follows the away action. When someone returns, the override resumes until it expires.",
   "card.presence_away": "Away",
-
   "valve_protection.title": "Valve Protection",
   "valve_protection.hint": "Periodically opens idle TRV valves briefly to prevent seizing or calcification.",
   "valve_protection.interval_label": "Cycle interval",
   "valve_protection.interval_suffix": "days",
   "valve_protection.interval_hint": "How long a valve can be idle before being cycled (1–90 days)",
-
   "compressor.title": "Compressor Protection",
   "compressor.no_groups": "No compressor groups configured.",
   "compressor.add_group": "Add compressor group",
@@ -481,7 +470,6 @@
   "compressor.action_script_hint": "A Home Assistant script that runs whenever the heating/cooling demand changes. Useful for systems that need special commands, e.g. cancelling a Vaillant Quick Veto or toggling a relay. Works with or without a master device. Without a master device, only the script is triggered. Receives variables: action (heat/cool/idle), master_entity, members, active_members.",
   "compressor.enforce_uniform_mode": "Enforce uniform mode",
   "compressor.enforce_uniform_mode_hint": "All thermostats in this group must operate in the same HVAC mode (all heating or all cooling). Rooms that disagree with the resolved group mode will be set to idle. Use this for heat pumps that start automatically but require all connected units to run the same mode.",
-
   "mold.title": "Mold Risk Protection",
   "mold.detection": "Mold Detection",
   "mold.detection_desc": "Receive notifications when humidity indicates mold risk",
@@ -500,7 +488,6 @@
   "card.mold_critical": "Mold danger!",
   "card.mold_prevention": "Mold prevention +{delta}{unit}",
   "room.mold_surface_rh": "Est. surface humidity: {value}%",
-
   "settings.intro.general": "Basic display and control settings.",
   "settings.intro.sensors": "Configure outdoor sensors and weather data for accurate climate control.",
   "settings.intro.control": "Choose how RoomMind controls your climate devices and set priority and thresholds.",
@@ -512,7 +499,6 @@
   "settings.intro.notifications": "Configure who receives alerts and how.",
   "settings.intro.learning": "Manage thermal model training and accelerate re-learning after changes.",
   "settings.intro.reset": "Clear learned thermal model data. The model will start learning from scratch.",
-
   "notifications.title": "Notifications",
   "notifications.enabled": "Enable notifications",
   "notifications.enabled_hint": "When disabled, no notifications are sent — neither to devices nor to the HA sidebar.",
@@ -527,7 +513,6 @@
   "notifications.cooldown_hint": "Minimum time between repeated alerts per room",
   "notifications.mold_prevention_notify": "Notify when mold prevention activates",
   "notifications.mold_prevention_notify_hint": "Also send a notification when prevention activates (temperature raised)",
-
   "room.section.heat_source": "Heat Source Orchestration",
   "heat_source.toggle": "Smart source selection",
   "heat_source.toggle_hint": "When this room has both radiator thermostats and an AC/heat pump, RoomMind intelligently routes heating demand to the most efficient device based on temperature gap and outdoor conditions.",

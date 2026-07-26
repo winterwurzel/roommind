@@ -60,6 +60,11 @@ class _RoomCoverState:
     user_override_until: float = 0.0  # Unix timestamp; 0 = no override
     last_was_forced: bool = False  # True after forced position (schedule/night close)
     last_command_ts: float = 0.0  # timestamp of last issued command (for transit settling)
+    owned: bool = False  # current position was produced by RoomMind
+    baseline_position: int | None = None  # position before first deploy of a shading episode
+    travel_from: int | None = None  # real reading at command time (travel corridor anchor)
+    last_reading: int | None = None  # last real reading; never overwritten by commands
+    drift_latched: bool = False  # current drift episode already armed an override once
 
 
 class CoverManager:
@@ -75,32 +80,56 @@ class CoverManager:
     def update_position(self, area_id: str, position: int, override_minutes: int = COVER_USER_OVERRIDE_MINUTES) -> None:
         """Update the tracked position from HA state. Call before evaluate().
 
-        Detects user manual override: if the cover position differs significantly
-        from the last position RoomMind commanded (in either direction), the user
-        moved it manually. In that case, auto control pauses for
-        ``override_minutes``.
-
-        Compares against ``last_commanded_position`` (stable across cycles) rather
-        than ``current_position`` so that detection survives the 90 s settling
-        window even when the HA-reported position is read repeatedly.
+        Detects user manual moves by comparing readings against the last
+        commanded position. Movement along the travel corridor toward the
+        target is RoomMind's own motion. Anything else arms a user override
+        for ``override_minutes``, releases RoomMind's ownership of the
+        position and drops the shading baseline.
         """
         state = self._get_state(area_id)
-        _drift = (
-            state.last_commanded_position is not None
-            and abs(position - state.last_commanded_position) > COVER_USER_CONFLICT_THRESHOLD
-            and (time.time() - state.last_command_ts) >= COVER_TRANSITION_SETTLE_S
-        )
-        if _drift and override_minutes > 0:
-            if state.user_override_until == 0 or position != state.current_position:
-                state.user_override_until = time.time() + override_minutes * 60
+        prev = state.last_reading
+        state.last_reading = position
+        state.current_position = position
+
+        if override_minutes <= 0 or state.last_commanded_position is None:
+            return
+
+        now = time.time()
+        target = state.last_commanded_position
+
+        if abs(position - target) <= COVER_USER_CONFLICT_THRESHOLD:
+            state.travel_from = None
+            state.drift_latched = False
+            return
+
+        moved = prev is not None and position != prev
+
+        if moved and state.travel_from is not None and prev is not None:
+            lo = min(state.travel_from, target) - COVER_USER_CONFLICT_THRESHOLD
+            hi = max(state.travel_from, target) + COVER_USER_CONFLICT_THRESHOLD
+            if lo <= position <= hi and abs(position - target) < abs(prev - target):
+                return
+
+        if not moved and (now - state.last_command_ts) < COVER_TRANSITION_SETTLE_S:
+            return
+
+        state.owned = False
+        state.baseline_position = None
+        state.travel_from = None
+        if state.user_override_until <= now:
+            if moved or not state.drift_latched:
+                state.user_override_until = now + override_minutes * 60
+                state.drift_latched = True
                 _LOGGER.info(
                     "Cover user override detected [%s]: position %d vs commanded %d → pausing %d min",
                     area_id,
                     position,
-                    state.last_commanded_position,
+                    target,
                     override_minutes,
                 )
-        state.current_position = position
+        elif moved:
+            state.user_override_until = now + override_minutes * 60
+            state.drift_latched = True
 
     def get_current_position(self, area_id: str) -> int:
         """Return the last-known cover position for a room (100 if unknown)."""
@@ -109,6 +138,18 @@ class CoverManager:
     def is_user_override_active(self, area_id: str) -> bool:
         """Return True if user manual override is currently active."""
         return self._get_state(area_id).user_override_until > time.time()
+
+    def get_user_override_until(self, area_id: str) -> float | None:
+        """Return the unix timestamp until which a user override is active, or None."""
+        until = self._get_state(area_id).user_override_until
+        return until if until > time.time() else None
+
+    def clear_user_override(self, area_id: str) -> None:
+        """End a user override pause so automatic control resumes next cycle."""
+        state = self._get_state(area_id)
+        state.user_override_until = 0.0
+        # Latch stays set: the still-present drift must not immediately re-arm the pause
+        state.drift_latched = True
 
     def evaluate(
         self,
@@ -148,6 +189,7 @@ class CoverManager:
             if state.user_override_until > time.time():
                 return CoverDecision(target_position=current, changed=False, reason="user_override_active")
             state.last_was_forced = True
+            state.baseline_position = None
             if abs(forced_position - current) <= 2:
                 return CoverDecision(
                     target_position=current, changed=False, reason=f"forced_at_target({forced_reason})"
@@ -159,12 +201,16 @@ class CoverManager:
             return CoverDecision(target_position=current, changed=False, reason="disabled")
 
         # Gate 2.5: Schedule gate — a gate-mode schedule is off, suppress solar logic
-        # Retract covers (open) when gate is inactive, subject to rate limit.
+        # Retract owned covers (open) when gate is inactive, subject to rate limit.
         if not solar_gated:
             state.last_was_forced = False
-            if current < 100 and (time.time() - state.last_change_ts) >= COVER_MIN_HOLD_SECONDS:
-                return self._apply_change(state, 100, "gate_retract")
-            return CoverDecision(target_position=current, changed=False, reason="gate_inactive")
+            return self._retract_decision(
+                state,
+                "gate_inactive",
+                "gate_retract",
+                hold_time_ok=(time.time() - state.last_change_ts) >= COVER_MIN_HOLD_SECONDS,
+                rate_limited_reason="gate_inactive",
+            )
 
         # Gate 3: Manual override — never fight the user
         if has_active_override:
@@ -189,37 +235,43 @@ class CoverManager:
             )
             if solar_threat:
                 return CoverDecision(target_position=current, changed=False, reason="low_solar_but_peak_predicted")
-            if current < 100:
-                if not was_forced and (time.time() - state.last_change_ts) < COVER_MIN_HOLD_SECONDS:
-                    return CoverDecision(target_position=current, changed=False, reason="min_hold_time")
-                return self._apply_change(state, 100, "low_solar_retract")
-            return CoverDecision(target_position=100, changed=False, reason="low_solar")
+            return self._retract_decision(
+                state,
+                "low_solar",
+                "low_solar_retract",
+                hold_time_ok=was_forced or (time.time() - state.last_change_ts) >= COVER_MIN_HOLD_SECONDS,
+            )
 
         # Compute desired position
         excess = predicted_peak_temp - target_temp
         retract_threshold = covers_deploy_threshold - COVER_HYSTERESIS
+        now = time.time()
+        hold_time_ok = was_forced or (now - state.last_change_ts) >= COVER_MIN_HOLD_SECONDS
 
-        if excess > covers_deploy_threshold:
-            if covers_snap_deploy:
-                desired_pos = covers_min_position
-            else:
-                raw_close_pct = min(100, int((excess - covers_deploy_threshold) * COVER_POS_SCALE))
-                desired_pos = max(covers_min_position, 100 - raw_close_pct)
-        elif excess < retract_threshold:
-            desired_pos = 100
-        else:
+        if excess < retract_threshold:
+            return self._retract_decision(state, "deadband", "retract", hold_time_ok=hold_time_ok)
+        if excess <= covers_deploy_threshold:
             # Hysteresis band — hold
             return CoverDecision(target_position=current, changed=False, reason="hysteresis_hold")
 
-        # Rate-limit: minimum hold time between changes (skip after forced)
-        now = time.time()
-        if not was_forced and (now - state.last_change_ts) < COVER_MIN_HOLD_SECONDS:
+        if covers_snap_deploy:
+            desired_pos = covers_min_position
+        else:
+            raw_close_pct = min(100, int((excess - covers_deploy_threshold) * COVER_POS_SCALE))
+            desired_pos = max(covers_min_position, 100 - raw_close_pct)
+        if state.baseline_position is not None:
+            desired_pos = min(desired_pos, state.baseline_position)
+        if desired_pos > current and not state.owned:
+            return CoverDecision(target_position=current, changed=False, reason="user_position_hold")
+
+        if not hold_time_ok:
             return CoverDecision(target_position=current, changed=False, reason="min_hold_time")
 
-        # Deadband: ignore small position changes to avoid motor wear
         if abs(desired_pos - current) <= COVER_POS_DEADBAND:
             return CoverDecision(target_position=current, changed=False, reason="deadband")
 
+        if not state.owned and state.baseline_position is None:
+            state.baseline_position = current
         reason = f"deploy(excess={excess:.2f}°C→pos={desired_pos}%)" if desired_pos < 100 else "retract"
         return self._apply_change(state, desired_pos, reason)
 
@@ -302,8 +354,41 @@ class CoverManager:
         return self._states[area_id]
 
     def _apply_change(self, state: _RoomCoverState, position: int, reason: str) -> CoverDecision:
+        state.travel_from = state.current_position
         state.current_position = position
         state.last_commanded_position = position
         state.last_change_ts = time.time()
         state.last_command_ts = time.time()
+        state.owned = True
+        state.drift_latched = False
         return CoverDecision(target_position=position, changed=True, reason=reason)
+
+    def _retract_decision(
+        self,
+        state: _RoomCoverState,
+        hold_reason: str,
+        apply_reason: str,
+        hold_time_ok: bool,
+        rate_limited_reason: str = "min_hold_time",
+    ) -> CoverDecision:
+        current = state.current_position
+        target = state.baseline_position if state.baseline_position is not None else 100
+        if current >= target or abs(target - current) <= COVER_POS_DEADBAND:
+            if state.baseline_position is not None:
+                # Episode ends at/near the user baseline without a command —
+                # hand the position back like the command-restore path below.
+                state.owned = False
+            state.baseline_position = None
+            return CoverDecision(target_position=current, changed=False, reason=hold_reason)
+        if not state.owned:
+            return CoverDecision(target_position=current, changed=False, reason="user_position_hold")
+        if not hold_time_ok:
+            return CoverDecision(target_position=current, changed=False, reason=rate_limited_reason)
+        had_baseline = state.baseline_position is not None
+        state.baseline_position = None
+        decision = self._apply_change(state, target, apply_reason)
+        if had_baseline:
+            # Restoring a real user baseline hands the position back to the user —
+            # relinquish ownership so the next retract doesn't auto-open it to 100.
+            state.owned = False
+        return decision

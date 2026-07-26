@@ -100,7 +100,8 @@ async def _compute_target_forecast(
     eco_heat = room.get("eco_heat", room.get("eco_temp", DEFAULT_ECO_HEAT))
     eco_cool = room.get("eco_cool", DEFAULT_ECO_COOL)
     override_until = room.get("override_until")
-    override_temp = room.get("override_temp")
+    override_heat = room.get("override_heat")
+    override_cool = room.get("override_cool")
     vacation_until = settings.get("vacation_until")
     vacation_temp = settings.get("vacation_temp")
     climate_mode = room.get("climate_mode", "auto")
@@ -123,7 +124,8 @@ async def _compute_target_forecast(
             ts,
             schedule_blocks,
             override_until,
-            override_temp,
+            override_heat,
+            override_cool,
             vacation_until,
             vacation_temp,
             comfort_heat,
