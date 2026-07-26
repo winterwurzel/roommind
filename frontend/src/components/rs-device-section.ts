@@ -25,6 +25,7 @@ export class RsDeviceSection extends LitElement {
   @state() private _showBoostHint = false;
   @state() private _selectedThermostats: Set<string> = new Set();
   @state() private _selectedCoolingDevices: Set<string> = new Set();
+  @state() private _selectedElectric: Set<string> = new Set();
   @state() private _heatingSystemType = "";
   @state() private _selectedForEdit = "";
 
@@ -35,6 +36,9 @@ export class RsDeviceSection extends LitElement {
       );
       this._selectedCoolingDevices = new Set(
         this.devices.filter((d) => d.type === "ac").map((d) => d.entity_id),
+      );
+      this._selectedElectric = new Set(
+        this.devices.filter((d) => d.type === "electric").map((d) => d.entity_id),
       );
       this._heatingSystemType = resolveHeatingSystemType(this.devices);
 
@@ -329,7 +333,10 @@ export class RsDeviceSection extends LitElement {
   }
 
   private _renderViewMode() {
-    const hasClimate = this._selectedThermostats.size > 0 || this._selectedCoolingDevices.size > 0;
+    const hasClimate =
+      this._selectedThermostats.size > 0 ||
+      this._selectedCoolingDevices.size > 0 ||
+      this._selectedElectric.size > 0;
 
     return html`
       ${hasClimate
@@ -340,6 +347,7 @@ export class RsDeviceSection extends LitElement {
               </div>
               ${[...this._selectedThermostats].map((id) => this._renderViewRow(id, "climate"))}
               ${[...this._selectedCoolingDevices].map((id) => this._renderViewRow(id, "climate"))}
+              ${[...this._selectedElectric].map((id) => this._renderViewRow(id, "climate"))}
             </div>
           `
         : nothing}
@@ -559,7 +567,8 @@ export class RsDeviceSection extends LitElement {
   private _renderMasterRow(entityId: string, external: boolean) {
     const isThermostat = this._selectedThermostats.has(entityId);
     const isAc = this._selectedCoolingDevices.has(entityId);
-    const isInRoom = isThermostat || isAc;
+    const isElectric = this._selectedElectric.has(entityId);
+    const isInRoom = isThermostat || isAc || isElectric;
     const isFocused = this._selectedForEdit === entityId;
     const entityState = this.hass.states[entityId];
     const friendlyName = (entityState?.attributes?.friendly_name as string) || entityId;
@@ -568,7 +577,9 @@ export class RsDeviceSection extends LitElement {
       ? localize("devices.type_thermostat", this.hass.language)
       : isAc
         ? localize("devices.type_ac", this.hass.language)
-        : "";
+        : isElectric
+          ? localize("devices.type_electric", this.hass.language)
+          : "";
 
     return html`
       <div
