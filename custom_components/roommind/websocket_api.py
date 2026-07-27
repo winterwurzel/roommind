@@ -41,9 +41,14 @@ def _validate_device_idle_action(device: dict) -> dict:
     idle_action="low" lowers the setpoint to min_temp while keeping the
     device in its active hvac_mode. For ACs this would cool continuously
     toward the minimum, which is never the intent. Restrict "low" to TRVs.
+
+    idle_action="fan_only" needs a fan, which a resistive electric heater
+    does not have.
     """
     if device.get("type") == "ac" and device.get("idle_action") == "low":
         raise vol.Invalid("idle_action='low' is only supported for TRVs (type='trv')")
+    if device.get("type") == "electric" and device.get("idle_action") == "fan_only":
+        raise vol.Invalid("idle_action='fan_only' is not supported for electric heaters")
     return device
 
 
@@ -310,7 +315,7 @@ async def websocket_list_rooms(
             vol.All(
                 {
                     vol.Required("entity_id"): str,
-                    vol.Required("type"): vol.In(["trv", "ac"]),
+                    vol.Required("type"): vol.In(["trv", "ac", "electric"]),
                     vol.Optional("role", default="auto"): vol.In(["primary", "secondary", "auto"]),
                     vol.Optional("heating_system_type", default=""): vol.In(["", "radiator", "underfloor"]),
                     vol.Optional("idle_action", default="off"): vol.In(["off", "fan_only", "setback", "low"]),

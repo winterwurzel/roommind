@@ -27,7 +27,7 @@ from ..const import (
     HEAT_SOURCE_SECONDARY_POWER_SCALE,
     MODE_HEATING,
 )
-from ..utils.device_utils import get_ac_eids, get_trv_eids, has_reliable_hvac_modes
+from ..utils.device_utils import get_ac_eids, get_electric_eids, get_trv_eids, has_reliable_hvac_modes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,7 +98,10 @@ def evaluate_heat_sources(
 
     thermostats = get_trv_eids(room_config.get("devices", []))
     acs = get_ac_eids(room_config.get("devices", []))
-    if not thermostats or not acs:
+    electrics = get_electric_eids(room_config.get("devices", []))
+    # Orchestration needs a boiler-driven source and at least one electric
+    # alternative to choose between.
+    if not thermostats or not (acs or electrics):
         return None
 
     if current_temp is None or target_temp is None:
@@ -110,13 +113,38 @@ def evaluate_heat_sources(
 
     delta_t = target_temp - current_temp
 
-    # Fixed roles: thermostats = primary, ACs = secondary
+    # Fixed roles: boiler-driven thermostats = primary, electric sources = secondary.
+    #
+    # Resistive electric heaters only participate while prefer_electric_heat is on.
+    # A heat pump can beat a boiler on running cost in mild weather, but resistive
+    # heat never does - it is worth running only when the power is surplus that
+    # would otherwise be exported, so it must not be picked on cost heuristics.
+    prefer_electric_flag = bool(room_config.get("prefer_electric_heat", False))
     primary_devices: list[tuple[str, str]] = [(eid, "thermostat") for eid in thermostats]
     secondary_devices: list[tuple[str, str]] = [(eid, "ac") for eid in acs]
+    if prefer_electric_flag:
+        secondary_devices += [(eid, "electric") for eid in electrics]
+
+    # Electric heaters kept out of the selectable group still need explicit idle
+    # commands, otherwise nothing turns them off once a surplus window ends.
+    unselected_electrics = [] if prefer_electric_flag else list(electrics)
+
+    def _idle_electric_cmds() -> list[DeviceCommand]:
+        return [
+            DeviceCommand(
+                entity_id=eid,
+                role="secondary",
+                device_type="electric",
+                active=False,
+                power_fraction=0.0,
+                reason="electric heat not preferred",
+            )
+            for eid in unselected_electrics
+        ]
 
     # Early exit: at or above target, no heating needed
     if delta_t <= 0:
-        idle_cmds: list[DeviceCommand] = []
+        idle_cmds: list[DeviceCommand] = _idle_electric_cmds()
         for eid, device_type in primary_devices:
             idle_cmds.append(
                 DeviceCommand(
@@ -158,16 +186,28 @@ def evaluate_heat_sources(
     primary_devices = [(eid, dt) for eid, dt in primary_devices if dt != "ac" or _ac_can_heat(hass, eid)]
     secondary_devices = [(eid, dt) for eid, dt in secondary_devices if dt != "ac" or _ac_can_heat(hass, eid)]
 
-    # Filter unavailable thermostats
-    primary_devices = [(eid, dt) for eid, dt in primary_devices if dt != "thermostat" or _is_available(hass, eid)]
-    secondary_devices = [(eid, dt) for eid, dt in secondary_devices if dt != "thermostat" or _is_available(hass, eid)]
+    # Filter unavailable thermostats and electric heaters. Electric heaters skip the
+    # AC filters above on purpose: no compressor, so no cold-weather capability limit
+    # and no hvac_modes capability probe.
+    primary_devices = [(eid, dt) for eid, dt in primary_devices if dt == "ac" or _is_available(hass, eid)]
+    secondary_devices = [(eid, dt) for eid, dt in secondary_devices if dt == "ac" or _is_available(hass, eid)]
 
     # Determine which source group to activate
     large_gap_threshold = primary_delta * HEAT_SOURCE_LARGE_GAP_MULTIPLIER
 
+    # Electric preference (e.g. heating from surplus PV): electric sources must win
+    # over the boiler regardless of outdoor temperature, and a large gap must not
+    # pull the boiler in as well - the point is that the boiler runs less. Requires
+    # a usable electric source: the filtering above drops ACs in extreme cold or
+    # without heat support and drops unavailable heaters, and in that case normal
+    # selection applies so the room is not left unheated.
+    prefer_electric = prefer_electric_flag and bool(secondary_devices)
+
     # Weather-based preference with hysteresis (None when no outdoor data available)
     prefer_ac: bool | None
-    if outdoor_temp is not None:
+    if prefer_electric:
+        prefer_ac = True
+    elif outdoor_temp is not None:
         if previous_active_sources == "secondary":
             # AC was active: keep unless outdoor drops below threshold - hysteresis
             prefer_ac = outdoor_temp > outdoor_threshold - HEAT_SOURCE_HYSTERESIS
@@ -180,7 +220,9 @@ def evaluate_heat_sources(
         prefer_ac = None
 
     # "both" when gap is large, or hysteresis holds "both" state
-    if delta_t >= large_gap_threshold + HEAT_SOURCE_HYSTERESIS:
+    if prefer_electric:
+        active = "secondary"
+    elif delta_t >= large_gap_threshold + HEAT_SOURCE_HYSTERESIS:
         active = "both"
     elif previous_active_sources == "both" and delta_t > primary_delta - HEAT_SOURCE_HYSTERESIS:
         active = "both"
@@ -218,7 +260,10 @@ def evaluate_heat_sources(
         reason_parts.append(f"boiler preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
     elif active == "secondary":
         outdoor_str = f"{outdoor_temp}°C" if outdoor_temp is not None else "n/a"
-        reason_parts.append(f"AC preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
+        if prefer_electric:
+            reason_parts.append(f"electric preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
+        else:
+            reason_parts.append(f"AC preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
 
     for eid, device_type in primary_devices:
         is_active = active in ("primary", "both")
@@ -251,6 +296,8 @@ def evaluate_heat_sources(
                 reason="active" if is_active else "not selected",
             )
         )
+
+    commands.extend(_idle_electric_cmds())
 
     reason = "; ".join(reason_parts) if reason_parts else active
 

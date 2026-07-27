@@ -25,6 +25,7 @@ export class RsDeviceSection extends LitElement {
   @state() private _showBoostHint = false;
   @state() private _selectedThermostats: Set<string> = new Set();
   @state() private _selectedCoolingDevices: Set<string> = new Set();
+  @state() private _selectedElectric: Set<string> = new Set();
   @state() private _heatingSystemType = "";
   @state() private _selectedForEdit = "";
 
@@ -35,6 +36,9 @@ export class RsDeviceSection extends LitElement {
       );
       this._selectedCoolingDevices = new Set(
         this.devices.filter((d) => d.type === "ac").map((d) => d.entity_id),
+      );
+      this._selectedElectric = new Set(
+        this.devices.filter((d) => d.type === "electric").map((d) => d.entity_id),
       );
       this._heatingSystemType = resolveHeatingSystemType(this.devices);
 
@@ -329,7 +333,10 @@ export class RsDeviceSection extends LitElement {
   }
 
   private _renderViewMode() {
-    const hasClimate = this._selectedThermostats.size > 0 || this._selectedCoolingDevices.size > 0;
+    const hasClimate =
+      this._selectedThermostats.size > 0 ||
+      this._selectedCoolingDevices.size > 0 ||
+      this._selectedElectric.size > 0;
 
     return html`
       ${hasClimate
@@ -340,6 +347,7 @@ export class RsDeviceSection extends LitElement {
               </div>
               ${[...this._selectedThermostats].map((id) => this._renderViewRow(id, "climate"))}
               ${[...this._selectedCoolingDevices].map((id) => this._renderViewRow(id, "climate"))}
+              ${[...this._selectedElectric].map((id) => this._renderViewRow(id, "climate"))}
             </div>
           `
         : nothing}
@@ -559,7 +567,8 @@ export class RsDeviceSection extends LitElement {
   private _renderMasterRow(entityId: string, external: boolean) {
     const isThermostat = this._selectedThermostats.has(entityId);
     const isAc = this._selectedCoolingDevices.has(entityId);
-    const isInRoom = isThermostat || isAc;
+    const isElectric = this._selectedElectric.has(entityId);
+    const isInRoom = isThermostat || isAc || isElectric;
     const isFocused = this._selectedForEdit === entityId;
     const entityState = this.hass.states[entityId];
     const friendlyName = (entityState?.attributes?.friendly_name as string) || entityId;
@@ -568,7 +577,9 @@ export class RsDeviceSection extends LitElement {
       ? localize("devices.type_thermostat", this.hass.language)
       : isAc
         ? localize("devices.type_ac", this.hass.language)
-        : "";
+        : isElectric
+          ? localize("devices.type_electric", this.hass.language)
+          : "";
 
     return html`
       <div
@@ -644,9 +655,13 @@ export class RsDeviceSection extends LitElement {
           .options=${[
             { value: "thermostat", label: localize("devices.type_thermostat", lang) },
             { value: "ac", label: localize("devices.type_ac", lang) },
+            { value: "electric", label: localize("devices.type_electric", lang) },
           ]}
           @selected=${(e: Event) =>
-            this._onDeviceTypeChange(entityId, getSelectValue(e) as "thermostat" | "ac")}
+            this._onDeviceTypeChange(
+              entityId,
+              getSelectValue(e) as "thermostat" | "ac" | "electric",
+            )}
           @closed=${(e: Event) => e.stopPropagation()}
           fixedMenuPosition
         >
@@ -654,7 +669,11 @@ export class RsDeviceSection extends LitElement {
             >${localize("devices.type_thermostat", lang)}</ha-list-item
           >
           <ha-list-item value="ac">${localize("devices.type_ac", lang)}</ha-list-item>
+          <ha-list-item value="electric">${localize("devices.type_electric", lang)}</ha-list-item>
         </ha-select>
+        ${device.type === "electric"
+          ? html`<div class="field-hint">${localize("devices.type_electric_hint", lang)}</div>`
+          : nothing}
       </div>
 
       ${isAc
@@ -823,12 +842,18 @@ export class RsDeviceSection extends LitElement {
     const device = this.devices.find((d) => d.entity_id === entityId);
     if (!device) return "thermostat";
     if (device.type === "ac") return "ac";
+    if (device.type === "electric") return "electric";
     return "thermostat";
   }
 
   private _onClimateToggle(entityId: string, checked: boolean) {
     let newDevices: DeviceConfig[];
     if (checked) {
+      // Never append a device that is already assigned. The backend rejects the
+      // whole save with "duplicate_entity", so if the checkbox and the device
+      // list ever disagree, an unguarded append makes the room unsaveable and
+      // the type the user picked is what gets lost.
+      if (this.devices.some((d) => d.entity_id === entityId)) return;
       const detected = this._detectClimateType(entityId);
       const type: DeviceType = detected === "thermostat" ? "trv" : "ac";
       newDevices = [...this.devices, { entity_id: entityId, type, role: "auto" }];
@@ -838,8 +863,9 @@ export class RsDeviceSection extends LitElement {
     this._fireDeviceChanged(newDevices);
   }
 
-  private _onDeviceTypeChange(entityId: string, type: "thermostat" | "ac") {
-    const deviceType: DeviceType = type === "thermostat" ? "trv" : "ac";
+  private _onDeviceTypeChange(entityId: string, type: "thermostat" | "ac" | "electric") {
+    const deviceType: DeviceType =
+      type === "thermostat" ? "trv" : type === "electric" ? "electric" : "ac";
     const newDevices = this.devices.map((d) => {
       if (d.entity_id !== entityId) return d;
       const updated: DeviceConfig = { ...d, type: deviceType };
@@ -847,6 +873,11 @@ export class RsDeviceSection extends LitElement {
       // Reset when switching to AC so the next save does not fail.
       if (deviceType === "ac" && updated.idle_action === "low") {
         updated.idle_action = "off";
+      }
+      // heating_system_type describes a boiler-driven emitter; meaningless for a
+      // resistive heater and only TRV devices feed get_room_heating_system_type.
+      if (deviceType === "electric") {
+        updated.heating_system_type = "";
       }
       return updated;
     });

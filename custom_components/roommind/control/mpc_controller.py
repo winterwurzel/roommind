@@ -624,6 +624,7 @@ DEFAULT_OUTDOOR_TEMP_FALLBACK = 10.0
 SAFETY_GUARD_MIN_BLOCKS = 6  # Minimum guard horizon (30 min floor)
 GUARD_PREDICTION_MARGIN = 0.2  # °C margin for prediction-based guard bypass
 HARD_OVERSHOOT_CEILING = 1.0  # °C — model-independent max overshoot before forced idle
+DEFERRED_ACTION_MARGIN = 0.5  # °C outside the band before a deferred action is promoted
 
 # Minimum sample counts before MPC is allowed.
 # Each EKF update covers ~3 min (EKF_UPDATE_MIN_DT), so these correspond
@@ -1004,6 +1005,34 @@ class MPCController:
             elif not self._within_min_run(MODE_COOLING):
                 action = MODE_IDLE
                 power_fraction = 0.0
+
+        # Deferred-action guard — mirror of the hard ceiling above. That one
+        # forces idle when overshooting; this one forces action when the room is
+        # stuck outside the band.
+        #
+        # The optimizer re-plans every coordinator cycle and only plan.actions[0]
+        # is ever executed, so an action scheduled for a later block is never
+        # reached. Observed: living_room at 22.9°C against a 21.0°C cool target
+        # planning ['idle','idle','idle','idle','cooling',...] on every cycle, so
+        # cooling stayed 20 minutes in the future indefinitely and the room
+        # oscillated 1.1-1.7°C above target.
+        #
+        # can_heat/can_cool come from get_can_heat_cool(), the single source of
+        # truth for availability: it already applies climate_mode, device
+        # presence and the outdoor gate (bypassed while an override is active).
+        # Gating on the plan containing the action instead is NOT sufficient —
+        # the optimizer frequently returns an all-idle plan for a room that is
+        # well outside the band, which left the room stuck exactly as before.
+        #
+        # Comfort wins once the band is breached: inside the band the optimizer
+        # keeps full control, including its pre-heat/pre-cool behaviour.
+        if action == MODE_IDLE:
+            if can_cool and near_cool and current_temp >= min(near_cool) + DEFERRED_ACTION_MARGIN:
+                action = MODE_COOLING
+                power_fraction = 1.0
+            elif can_heat and near_heat and current_temp <= max(near_heat) - DEFERRED_ACTION_MARGIN:
+                action = MODE_HEATING
+                power_fraction = 1.0
 
         return action, power_fraction
 

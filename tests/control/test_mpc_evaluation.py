@@ -989,3 +989,153 @@ def test_mpc_guard_horizon_extended_for_ufh(monkeypatch):
     )
     mode, _ = ctrl._evaluate_mpc(21.0, TargetTemps(heat=21.0, cool=25.0))
     assert mode == MODE_HEATING, "Extended guard horizon for UFH should allow heating at mild outdoor=19°C"
+
+
+# ---------------------------------------------------------------------------
+# Deferred-action guard
+#
+# The optimizer re-plans every coordinator cycle and only plan.actions[0] runs.
+# A plan that schedules cooling/heating for a later block therefore never
+# executes it, leaving the room parked outside the band. Observed live:
+# living_room at 22.9C against a 21.0C cool target planning
+# ['idle','idle','idle','idle','cooling',...] on every cycle.
+# ---------------------------------------------------------------------------
+
+
+def _deferred_plan(action, defer_to=4, blocks=6):
+    """Plan that idles now and only takes *action* from block *defer_to* on."""
+    return MPCPlan(
+        actions=[MODE_IDLE] * defer_to + [action] * (blocks - defer_to),
+        temperatures=[22.9] * (blocks + 1),
+        power_fractions=[0.0] * defer_to + [1.0] * (blocks - defer_to),
+    )
+
+
+def _cool_controller(outdoor_temp=27.0):
+    return MPCController(
+        build_hass(),
+        make_room(acs=["climate.ac1"], thermostats=[], climate_mode="cool_only"),
+        model_manager=RoomModelManager(),
+        outdoor_temp=outdoor_temp,
+        settings={},
+        has_external_sensor=True,
+    )
+
+
+def _patch_optimize(monkeypatch, plan):
+    monkeypatch.setattr(
+        "custom_components.roommind.control.mpc_controller.MPCOptimizer.optimize",
+        lambda *a, **kw: plan,
+    )
+
+
+def test_deferred_cooling_is_promoted_to_now(monkeypatch):
+    """Cooling planned for a later block runs now when well above the cool target."""
+    ctrl = _cool_controller()
+    _patch_optimize(monkeypatch, _deferred_plan(MODE_COOLING))
+
+    # 22.9 vs cool target 21.0 — 1.9C outside the band, far past the margin
+    mode, pf = ctrl._evaluate_mpc(22.9, TargetTemps(heat=None, cool=21.0))
+
+    assert mode == MODE_COOLING
+    assert pf == 1.0
+
+
+def test_deferred_cooling_not_promoted_within_margin(monkeypatch):
+    """A room barely outside the band keeps the optimizer's idle decision."""
+    ctrl = _cool_controller()
+    _patch_optimize(monkeypatch, _deferred_plan(MODE_COOLING))
+
+    # 21.2 vs 21.0 — only 0.2C over, inside DEFERRED_ACTION_MARGIN
+    mode, pf = ctrl._evaluate_mpc(21.2, TargetTemps(heat=None, cool=21.0))
+
+    assert mode == MODE_IDLE
+    assert pf == 0.0
+
+
+def test_all_idle_plan_is_overridden_when_outside_the_band(monkeypatch):
+    """An all-idle plan must not strand a room outside the band.
+
+    Regression for the live failure: the optimizer returned an all-idle plan
+    for a room 1.9C above its cool target and the room sat there with the AC
+    off indefinitely. Availability is decided by can_cool, not by whether the
+    optimizer happened to schedule cooling somewhere in the plan.
+    """
+    ctrl = _cool_controller()
+    _patch_optimize(
+        monkeypatch,
+        MPCPlan(
+            actions=[MODE_IDLE] * 6,
+            temperatures=[22.9] * 7,
+            power_fractions=[0.0] * 6,
+        ),
+    )
+
+    mode, pf = ctrl._evaluate_mpc(22.9, TargetTemps(heat=None, cool=21.0))
+
+    assert mode == MODE_COOLING
+    assert pf == 1.0
+
+
+def test_deferred_guard_respects_unavailable_cooling(monkeypatch):
+    """No promotion when cooling is not available for the room at all.
+
+    heat_only leaves can_cool False, so however far above the cool target the
+    room drifts the guard must stay out of it.
+    """
+    ctrl = MPCController(
+        build_hass(),
+        make_room(acs=["climate.ac1"], thermostats=[], climate_mode="heat_only"),
+        model_manager=RoomModelManager(),
+        outdoor_temp=27.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    _patch_optimize(monkeypatch, _deferred_plan(MODE_COOLING))
+
+    mode, pf = ctrl._evaluate_mpc(25.0, TargetTemps(heat=None, cool=21.0))
+
+    assert mode == MODE_IDLE
+    assert pf == 0.0
+
+
+def test_deferred_heating_is_promoted_to_now(monkeypatch):
+    """Mirror of the cooling case: deferred heating runs now when well below target."""
+    ctrl = MPCController(
+        build_hass(),
+        make_room(),
+        model_manager=RoomModelManager(),
+        outdoor_temp=2.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    _patch_optimize(monkeypatch, _deferred_plan(MODE_HEATING))
+
+    # 18.0 vs heat target 21.0 — 3C below the band
+    mode, pf = ctrl._evaluate_mpc(18.0, TargetTemps(heat=21.0, cool=24.0))
+
+    assert mode == MODE_HEATING
+    assert pf == 1.0
+
+
+def test_deferred_guard_does_not_fight_the_overshoot_guard(monkeypatch):
+    """At or below the cool target the overshoot guard still wins.
+
+    The two guards must stay mutually exclusive: one fires at
+    current <= min(near_cool), the other at current >= min(near_cool) + margin.
+    """
+    ctrl = _cool_controller(outdoor_temp=30.0)
+    _patch_optimize(
+        monkeypatch,
+        MPCPlan(
+            actions=[MODE_COOLING] * 6,
+            temperatures=[22.0] * 7,
+            power_fractions=[0.8] * 6,
+        ),
+    )
+
+    # 22.0 <= cool target 23.0 → forced idle, and not re-promoted afterwards
+    mode, pf = ctrl._evaluate_mpc(22.0, TargetTemps(heat=21.0, cool=23.0))
+
+    assert mode == MODE_IDLE
+    assert pf == 0.0
