@@ -1017,24 +1017,20 @@ class MPCController:
         # cooling stayed 20 minutes in the future indefinitely and the room
         # oscillated 1.1-1.7°C above target.
         #
-        # Membership in plan.actions is the availability proof: an action only
-        # gets there if the optimizer had it in `available`, which already
-        # accounts for can_heat/can_cool and the outdoor gate. This only corrects
-        # *when* the optimizer acts, never *whether*.
+        # can_heat/can_cool come from get_can_heat_cool(), the single source of
+        # truth for availability: it already applies climate_mode, device
+        # presence and the outdoor gate (bypassed while an override is active).
+        # Gating on the plan containing the action instead is NOT sufficient —
+        # the optimizer frequently returns an all-idle plan for a room that is
+        # well outside the band, which left the room stuck exactly as before.
+        #
+        # Comfort wins once the band is breached: inside the band the optimizer
+        # keeps full control, including its pre-heat/pre-cool behaviour.
         if action == MODE_IDLE:
-            planned = set(plan.actions[:guard_blocks])
-            if (
-                near_cool
-                and MODE_COOLING in planned
-                and current_temp >= min(near_cool) + DEFERRED_ACTION_MARGIN
-            ):
+            if can_cool and near_cool and current_temp >= min(near_cool) + DEFERRED_ACTION_MARGIN:
                 action = MODE_COOLING
                 power_fraction = 1.0
-            elif (
-                near_heat
-                and MODE_HEATING in planned
-                and current_temp <= max(near_heat) - DEFERRED_ACTION_MARGIN
-            ):
+            elif can_heat and near_heat and current_temp <= max(near_heat) - DEFERRED_ACTION_MARGIN:
                 action = MODE_HEATING
                 power_fraction = 1.0
 

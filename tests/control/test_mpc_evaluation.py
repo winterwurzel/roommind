@@ -1053,22 +1053,45 @@ def test_deferred_cooling_not_promoted_within_margin(monkeypatch):
     assert pf == 0.0
 
 
-def test_deferred_guard_never_invents_an_unplanned_action(monkeypatch):
-    """An all-idle plan is respected: the guard corrects timing, not availability.
+def test_all_idle_plan_is_overridden_when_outside_the_band(monkeypatch):
+    """An all-idle plan must not strand a room outside the band.
 
-    Membership in plan.actions is what proves the mode is enabled and not
-    outdoor-gated, so a plan without cooling must never be overridden however
-    far the room is outside the band.
+    Regression for the live failure: the optimizer returned an all-idle plan
+    for a room 1.9C above its cool target and the room sat there with the AC
+    off indefinitely. Availability is decided by can_cool, not by whether the
+    optimizer happened to schedule cooling somewhere in the plan.
     """
     ctrl = _cool_controller()
     _patch_optimize(
         monkeypatch,
         MPCPlan(
             actions=[MODE_IDLE] * 6,
-            temperatures=[25.0] * 7,
+            temperatures=[22.9] * 7,
             power_fractions=[0.0] * 6,
         ),
     )
+
+    mode, pf = ctrl._evaluate_mpc(22.9, TargetTemps(heat=None, cool=21.0))
+
+    assert mode == MODE_COOLING
+    assert pf == 1.0
+
+
+def test_deferred_guard_respects_unavailable_cooling(monkeypatch):
+    """No promotion when cooling is not available for the room at all.
+
+    heat_only leaves can_cool False, so however far above the cool target the
+    room drifts the guard must stay out of it.
+    """
+    ctrl = MPCController(
+        build_hass(),
+        make_room(acs=["climate.ac1"], thermostats=[], climate_mode="heat_only"),
+        model_manager=RoomModelManager(),
+        outdoor_temp=27.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    _patch_optimize(monkeypatch, _deferred_plan(MODE_COOLING))
 
     mode, pf = ctrl._evaluate_mpc(25.0, TargetTemps(heat=None, cool=21.0))
 
