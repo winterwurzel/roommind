@@ -231,6 +231,59 @@ class MPCOptimizer:
             lookahead_blocks=self._lookahead_blocks,
         )
 
+    def simulate_plan(
+        self,
+        plan: MPCPlan,
+        T_room: float,
+        T_outdoor_series: list[float],
+        dt_minutes: float,
+        *,
+        solar_series: list[float] | None = None,
+        residual_series: list[float] | None = None,
+        occupancy_series: list[float] | None = None,
+    ) -> list[float]:
+        """Replay a plan's actions under different disturbance series.
+
+        Answers "what would this plan have produced without X" without
+        re-optimizing, so a caller interested in one disturbance (the cover
+        logic, which only cares about solar overheating) can read a temperature
+        trajectory that excludes the others. Mirrors the forward step of
+        :meth:`optimize` exactly, including the residual-heat suppression while
+        active power flows and the physical clamp.
+        """
+        n_blocks = min(len(plan.actions), len(T_outdoor_series))
+        q_solar = solar_series or [0.0] * n_blocks
+        q_residual = residual_series or [0.0] * n_blocks
+        q_occupancy = occupancy_series or [0.0] * n_blocks
+
+        temperatures: list[float] = [T_room]
+        current_temp = T_room
+        for i in range(n_blocks):
+            pf = plan.power_fractions[i] if i < len(plan.power_fractions) else 0.0
+            action = plan.actions[i]
+            if action == MODE_HEATING:
+                Q = pf * self.model.Q_heat
+            elif action == MODE_COOLING:
+                Q = -(pf * self.model.Q_cool)
+            else:
+                Q = 0.0
+            qs = q_solar[i] if i < len(q_solar) else 0.0
+            qr = q_residual[i] if i < len(q_residual) else 0.0
+            qo = q_occupancy[i] if i < len(q_occupancy) else 0.0
+            next_temp = self.model.predict(
+                current_temp,
+                T_outdoor_series[i],
+                Q,
+                dt_minutes,
+                q_solar=qs,
+                q_residual=qr if Q == 0.0 else 0.0,
+                q_occupancy=qo,
+            )
+            next_temp = max(self.temp_min, min(next_temp, self.temp_max))
+            temperatures.append(round(next_temp, 2))
+            current_temp = next_temp
+        return temperatures
+
     def _evaluate_action(
         self,
         action: str,

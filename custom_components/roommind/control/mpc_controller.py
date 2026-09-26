@@ -753,6 +753,7 @@ class MPCController:
         self._area_id = room_config.get("area_id", "unknown")
         self._target_resolver = target_resolver
         self.last_plan: MPCPlan | None = None
+        self._peak_temps_unoccupied: list[float] | None = None
         self.q_solar = q_solar
         self._latitude = latitude
         self._longitude = longitude
@@ -949,6 +950,23 @@ class MPCController:
             occupancy_series=occupancy_series,
         )
         self.last_plan = plan
+        # Shading can attenuate solar gain, never the body heat of whoever just
+        # walked in, so the cover logic reads a peak computed without it (#418).
+        # Replaying the plan keeps the control decision itself untouched.
+        _unoccupied = (
+            optimizer.simulate_plan(
+                plan,
+                current_temp,
+                outdoor_series,
+                PLAN_DT_MINUTES,
+                solar_series=solar_series,
+                residual_series=residual_series,
+                occupancy_series=None,
+            )
+            if self.q_occupancy > 0
+            else None
+        )
+        self._peak_temps_unoccupied = _unoccupied if _unoccupied and len(_unoccupied) > 1 else None
 
         action = plan.get_current_action()
         power_fraction = plan.get_current_power_fraction()
@@ -1216,13 +1234,17 @@ class MPCController:
     def predicted_peak_temp(self) -> float | None:
         """Return the maximum predicted temperature over the MPC lookahead horizon.
 
+        Excludes occupancy heat: this value drives shading decisions, and covers
+        cannot counteract metabolic gain (#418).
+
         Available after async_evaluate() has been called.
         Returns None if no MPC plan was computed (bang-bang mode or insufficient data).
         """
         plan = self.last_plan
         if plan is None or not plan.temperatures or len(plan.temperatures) < 2:
             return None
-        return max(plan.temperatures[1:])  # Skip index 0 (current T)
+        temperatures = self._peak_temps_unoccupied or plan.temperatures
+        return max(temperatures[1:])  # Skip index 0 (current T)
 
     def _build_residual_series(self, n_blocks: int) -> list[float] | None:
         """Build decaying residual heat series for MPC horizon."""
@@ -1307,6 +1329,9 @@ class MPCController:
 
         _exclude = exclude_eids or set()
         thermostats = [e for e in self.thermostats if e not in _exclude]
+        # ACs were previously never filtered because exclude_eids only ever
+        # carried TRVs (valve protection is TRV-only).  Coil dry excludes ACs.
+        acs = [e for e in self.acs if e not in _exclude]
 
         # Managed mode (no external sensor) with auto climate mode and
         # both device types: activate each device in its natural mode so
@@ -1332,30 +1357,43 @@ class MPCController:
                     )
                 else:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
-            for eid in self.acs:
+            for eid in acs:
                 if eid in _forced_off:
                     await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
                 ac_state = self.hass.states.get(eid)
                 ac_modes = _effective_ac_modes(ac_state)
+                # A command must never carry the opposite side's target. Single
+                # setpoint heat_cool regulates from both sides onto the one value
+                # it gets, so a band with only a heating target would make the
+                # device cool down to it; the directed branches below have the
+                # same problem and now require their own target. Only a range
+                # device can express a one-sided band, by parking the unused side
+                # on its own limit.
                 ac_target = ha_cool_target if ha_cool_target is not None else ha_heat_target
                 ac_heat_target = ha_heat_target if ha_heat_target is not None else ha_cool_target
+                _both_targets = ha_heat_target is not None and ha_cool_target is not None
+                _known_range = bool(ac_state and ac_state.attributes.get("target_temp_low") is not None)
                 if ac_target is None:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
-                elif "heat_cool" in ac_modes:
+                elif "heat_cool" in ac_modes and (_both_targets or _known_range):
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat_cool"})
                     # Dual-setpoint: send both targets when device uses range mode
                     ac_state_now = self.hass.states.get(eid)
                     is_range = ac_state_now and ac_state_now.attributes.get("target_temp_low") is not None
-                    if is_range and ha_heat_target is not None and ha_cool_target is not None:
-                        low = min(ha_heat_target, ha_cool_target)
-                        high = max(ha_heat_target, ha_cool_target)
+                    if is_range:
+                        _attrs = ac_state_now.attributes if ac_state_now else {}
+                        low = ha_heat_target if ha_heat_target is not None else _attrs.get("min_temp")
+                        high = ha_cool_target if ha_cool_target is not None else _attrs.get("max_temp")
+                    else:
+                        low = high = None
+                    if low is not None and high is not None:
                         await self._call(
                             "set_temperature",
                             {
                                 "entity_id": eid,
-                                "target_temp_low": low,
-                                "target_temp_high": high,
+                                "target_temp_low": min(low, high),
+                                "target_temp_high": max(low, high),
                                 "hvac_mode": "heat_cool",
                             },
                         )
@@ -1376,25 +1414,24 @@ class MPCController:
                             temp_intent="cool",
                         )
                     else:
-                        ac_heat_t = ha_heat_target if ha_heat_target is not None else ha_cool_target
                         await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
                         await self._call(
                             "set_temperature",
-                            {"entity_id": eid, "temperature": ac_heat_t, "hvac_mode": "heat"},
+                            {"entity_id": eid, "temperature": ac_heat_target, "hvac_mode": "heat"},
                             temp_intent="heat",
                         )
-                elif can_cool and "cool" in ac_modes:
+                elif can_cool and ha_cool_target is not None and "cool" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "cool"})
                     await self._call(
                         "set_temperature",
-                        {"entity_id": eid, "temperature": ac_target, "hvac_mode": "cool"},
+                        {"entity_id": eid, "temperature": ha_cool_target, "hvac_mode": "cool"},
                         temp_intent="cool",
                     )
-                elif can_heat and "heat" in ac_modes:
+                elif can_heat and ha_heat_target is not None and "heat" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
                     await self._call(
                         "set_temperature",
-                        {"entity_id": eid, "temperature": ac_heat_target, "hvac_mode": "heat"},
+                        {"entity_id": eid, "temperature": ha_heat_target, "hvac_mode": "heat"},
                         temp_intent="heat",
                     )
                 elif "auto" in ac_modes:
@@ -1567,7 +1604,7 @@ class MPCController:
                 ac_heat_target = effective_target
             ha_ac_target = celsius_to_ha_temp(self.hass, ac_heat_target)
             ha_ac_direct = celsius_to_ha_temp(self.hass, effective_target)
-            for eid in self.acs:
+            for eid in acs:
                 if eid in _forced_off:
                     await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
@@ -1604,7 +1641,7 @@ class MPCController:
                 ac_cool_target = effective_target
             ha_target = celsius_to_ha_temp(self.hass, ac_cool_target)
             ha_cool_direct = celsius_to_ha_temp(self.hass, effective_target)
-            for eid in self.acs:
+            for eid in acs:
                 if eid in _forced_off:
                     await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
@@ -1622,7 +1659,7 @@ class MPCController:
                     continue
                 await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
         elif mode == MODE_IDLE:
-            for eid in thermostats + self.acs:
+            for eid in thermostats + acs:
                 if eid in _forced_on:
                     # Compressor min-run: set target temp so device self-regulates
                     # instead of overshooting at the old boost setpoint.

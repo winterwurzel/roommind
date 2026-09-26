@@ -7,7 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import Context
 
 DOMAIN = "roommind"
-VERSION = "1.7.5"
+VERSION = "1.7.7"
 
 # Platforms
 PLATFORMS = [
@@ -65,6 +65,13 @@ class TargetTemps(NamedTuple):
     heat: float | None = None  # None = don't heat / force off
     cool: float | None = None  # None = don't cool / force off
 
+
+# Plausibility bounds for resolved room target temperatures (°C).
+# Schedule blocks are free-form YAML, so a typo (110 instead of 11) would
+# otherwise be heated against for hours (#395). Same range as the override
+# climate entity in climate.py, which imports these.
+MIN_TARGET_TEMP = 5.0
+MAX_TARGET_TEMP = 35.0
 
 # Smart control defaults
 BANGBANG_HEAT_HYSTERESIS = 0.2  # °C below target → start heating (bang-bang fallback)

@@ -11,6 +11,16 @@ import { inputStyles } from "../styles/input-styles";
 import "./shared/rs-master-detail";
 import "./shared/rs-info-icon";
 
+/**
+ * UI-only sentinel for "inherit the global setting".  ha-select cannot render an
+ * option whose value is the empty string, so the stored "" would show up as a
+ * blank field.  Mapped back to "" on save; "__keep__" keeps its own meaning
+ * (send no fan mode at all) and must not be folded into this.
+ */
+const INHERIT = "__inherit__";
+
+const fromInherit = (value: string | undefined): string => (value === INHERIT ? "" : (value ?? ""));
+
 @customElement("rs-device-section")
 export class RsDeviceSection extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
@@ -19,6 +29,10 @@ export class RsDeviceSection extends LitElement {
   @property({ type: String }) public selectedTempSensor = "";
   @property({ attribute: false }) public valveProtectionExclude: Set<string> = new Set();
   @property({ type: Boolean }) public valveProtectionEnabled = false;
+  @property({ type: Boolean }) public coilDryEnabledGlobal = false;
+  @property({ type: Number }) public coilDryMinutesGlobal = 20;
+  @property({ type: String }) public coilDryModeGlobal = "fan_only";
+  @property({ type: String }) public coilDryFanModeGlobal = "low";
 
   @property({ type: Boolean }) public editing = false;
   @state() private _systemTypeInfoExpanded = false;
@@ -339,36 +353,42 @@ export class RsDeviceSection extends LitElement {
       this._selectedElectric.size > 0;
 
     return html`
-      ${hasClimate
-        ? html`
-            <div class="device-group">
-              <div class="section-subtitle">
-                ${localize("devices.climate_entities", this.hass.language)}
+      ${
+        hasClimate
+          ? html`
+              <div class="device-group">
+                <div class="section-subtitle">
+                  ${localize("devices.climate_entities", this.hass.language)}
+                </div>
+                ${[...this._selectedThermostats].map((id) => this._renderViewRow(id, "climate"))}
+                ${[...this._selectedCoolingDevices].map((id) => this._renderViewRow(id, "climate"))}
+                ${[...this._selectedElectric].map((id) => this._renderViewRow(id, "climate"))}
               </div>
-              ${[...this._selectedThermostats].map((id) => this._renderViewRow(id, "climate"))}
-              ${[...this._selectedCoolingDevices].map((id) => this._renderViewRow(id, "climate"))}
-              ${[...this._selectedElectric].map((id) => this._renderViewRow(id, "climate"))}
-            </div>
-          `
-        : nothing}
-      ${this._heatingSystemType
-        ? html`
-            <div class="device-group">
-              <div class="section-subtitle">
-                ${localize("devices.heating_system_type", this.hass.language)}
+            `
+          : nothing
+      }
+      ${
+        this._heatingSystemType
+          ? html`
+              <div class="device-group">
+                <div class="section-subtitle">
+                  ${localize("devices.heating_system_type", this.hass.language)}
+                </div>
+                <div class="view-row">
+                  <span class="view-name"
+                    >${
+                      this._heatingSystemType === "radiator"
+                        ? localize("devices.system_type_radiator", this.hass.language)
+                        : this._heatingSystemType === "underfloor"
+                          ? localize("devices.system_type_underfloor", this.hass.language)
+                          : this._heatingSystemType
+                    }</span
+                  >
+                </div>
               </div>
-              <div class="view-row">
-                <span class="view-name"
-                  >${this._heatingSystemType === "radiator"
-                    ? localize("devices.system_type_radiator", this.hass.language)
-                    : this._heatingSystemType === "underfloor"
-                      ? localize("devices.system_type_underfloor", this.hass.language)
-                      : this._heatingSystemType}</span
-                >
-              </div>
-            </div>
-          `
-        : nothing}
+            `
+          : nothing
+      }
     `;
   }
 
@@ -409,29 +429,36 @@ export class RsDeviceSection extends LitElement {
         <span class="view-name entity-link" @click=${() => openEntityInfo(this, entityId)}
           >${friendlyName}</span
         >
-        ${showIdleBadge
-          ? html`<span class="valve-exclude-badge">
-              ${device!.idle_action === "fan_only"
-                ? html`${localize("devices.idle_action_fan_only", this.hass.language)}${device!
-                    .idle_fan_mode
-                    ? ` (${device!.idle_fan_mode})`
-                    : nothing}`
-                : device!.idle_action === "low"
-                  ? localize("devices.idle_action_low", this.hass.language)
-                  : localize("devices.idle_action_setback", this.hass.language)}
-            </span>`
-          : nothing}
-        ${showDirectBadge
-          ? html`<span class="valve-exclude-badge">
-              ${localize("devices.setpoint_mode_direct", this.hass.language)}
-            </span>`
-          : nothing}
-        ${showExcludeBadge
-          ? html`<span class="valve-exclude-badge">
-              <ha-icon icon="mdi:shield-off-outline"></ha-icon>
-              ${localize("devices.valve_protection_excluded", this.hass.language)}
-            </span>`
-          : nothing}
+        ${
+          showIdleBadge
+            ? html`<span class="valve-exclude-badge">
+                ${
+                  device!.idle_action === "fan_only"
+                    ? html`${localize("devices.idle_action_fan_only", this.hass.language)}${
+                        device!.idle_fan_mode ? ` (${device!.idle_fan_mode})` : nothing
+                      }`
+                    : device!.idle_action === "low"
+                      ? localize("devices.idle_action_low", this.hass.language)
+                      : localize("devices.idle_action_setback", this.hass.language)
+                }
+              </span>`
+            : nothing
+        }
+        ${
+          showDirectBadge
+            ? html`<span class="valve-exclude-badge">
+                ${localize("devices.setpoint_mode_direct", this.hass.language)}
+              </span>`
+            : nothing
+        }
+        ${
+          showExcludeBadge
+            ? html`<span class="valve-exclude-badge">
+                <ha-icon icon="mdi:shield-off-outline"></ha-icon>
+                ${localize("devices.valve_protection_excluded", this.hass.language)}
+              </span>`
+            : nothing
+        }
         ${displayValue ? html`<span class="view-value">${displayValue}</span>` : nothing}
       </div>
     `;
@@ -462,11 +489,13 @@ export class RsDeviceSection extends LitElement {
             ${localize("devices.climate_entities", this.hass.language)}
           </div>
           <div class="master-list">
-            ${areaClimateEntities.length > 0
-              ? areaClimateEntities.map((e) => this._renderMasterRow(e.entity_id, false))
-              : html`<div class="no-devices">
-                  ${localize("devices.no_climate", this.hass.language)}
-                </div>`}
+            ${
+              areaClimateEntities.length > 0
+                ? areaClimateEntities.map((e) => this._renderMasterRow(e.entity_id, false))
+                : html`<div class="no-devices">
+                    ${localize("devices.no_climate", this.hass.language)}
+                  </div>`
+            }
             ${externalClimateIds.map((id) => this._renderMasterRow(id, true))}
           </div>
           <div class="entity-picker-wrap">
@@ -482,85 +511,93 @@ export class RsDeviceSection extends LitElement {
         </div>
 
         <div slot="detail" class="detail-panel">
-          ${detailId && inRoom(detailId)
-            ? this._renderDeviceDetail(detailId)
-            : html`<div class="empty-detail">
-                <ha-icon icon="mdi:gesture-tap"></ha-icon>
-                <span>${localize("devices.select_to_configure", this.hass.language)}</span>
-              </div>`}
+          ${
+            detailId && inRoom(detailId)
+              ? this._renderDeviceDetail(detailId)
+              : html`<div class="empty-detail">
+                  <ha-icon icon="mdi:gesture-tap"></ha-icon>
+                  <span>${localize("devices.select_to_configure", this.hass.language)}</span>
+                </div>`
+          }
         </div>
       </rs-master-detail>
 
-      ${this._selectedThermostats.size > 0
-        ? html`
-            <div class="block-divider"></div>
-            <div class="block">
-              <div class="subtitle-row">
-                <div class="section-subtitle">
-                  ${localize("devices.heating_system_type", this.hass.language)}
+      ${
+        this._selectedThermostats.size > 0
+          ? html`
+              <div class="block-divider"></div>
+              <div class="block">
+                <div class="subtitle-row">
+                  <div class="section-subtitle">
+                    ${localize("devices.heating_system_type", this.hass.language)}
+                  </div>
+                  <ha-icon
+                    class="info-icon ${this._systemTypeInfoExpanded ? "info-active" : ""}"
+                    icon="mdi:information-outline"
+                    @click=${() => {
+                      this._systemTypeInfoExpanded = !this._systemTypeInfoExpanded;
+                    }}
+                  ></ha-icon>
                 </div>
-                <ha-icon
-                  class="info-icon ${this._systemTypeInfoExpanded ? "info-active" : ""}"
-                  icon="mdi:information-outline"
-                  @click=${() => {
-                    this._systemTypeInfoExpanded = !this._systemTypeInfoExpanded;
-                  }}
-                ></ha-icon>
+                ${
+                  this._systemTypeInfoExpanded
+                    ? html`
+                        <div class="system-type-info">
+                          ${localize("devices.heating_system_type_info", this.hass.language)}
+                        </div>
+                      `
+                    : nothing
+                }
+                <ha-select
+                  .value=${this._heatingSystemType || "standard"}
+                  .options=${[
+                    {
+                      value: "standard",
+                      label: localize("devices.system_type_none", this.hass.language),
+                    },
+                    {
+                      value: "radiator",
+                      label: localize("devices.system_type_radiator", this.hass.language),
+                    },
+                    {
+                      value: "underfloor",
+                      label: localize("devices.system_type_underfloor", this.hass.language),
+                    },
+                  ]}
+                  @selected=${this._onHeatingSystemTypeChange}
+                  @closed=${(e: Event) => e.stopPropagation()}
+                  fixedMenuPosition
+                  style="width: 100%;"
+                >
+                  <ha-list-item value="standard"
+                    >${localize("devices.system_type_none", this.hass.language)}</ha-list-item
+                  >
+                  <ha-list-item value="radiator"
+                    >${localize("devices.system_type_radiator", this.hass.language)}</ha-list-item
+                  >
+                  <ha-list-item value="underfloor"
+                    >${localize("devices.system_type_underfloor", this.hass.language)}</ha-list-item
+                  >
+                </ha-select>
+                ${
+                  this._showBoostHint
+                    ? html`
+                        <div class="boost-hint">
+                          <ha-icon icon="mdi:information-outline"></ha-icon>
+                          <span
+                            >${localize(
+                              "devices.heating_system_type_boost_hint",
+                              this.hass.language,
+                            )}</span
+                          >
+                        </div>
+                      `
+                    : nothing
+                }
               </div>
-              ${this._systemTypeInfoExpanded
-                ? html`
-                    <div class="system-type-info">
-                      ${localize("devices.heating_system_type_info", this.hass.language)}
-                    </div>
-                  `
-                : nothing}
-              <ha-select
-                .value=${this._heatingSystemType || "standard"}
-                .options=${[
-                  {
-                    value: "standard",
-                    label: localize("devices.system_type_none", this.hass.language),
-                  },
-                  {
-                    value: "radiator",
-                    label: localize("devices.system_type_radiator", this.hass.language),
-                  },
-                  {
-                    value: "underfloor",
-                    label: localize("devices.system_type_underfloor", this.hass.language),
-                  },
-                ]}
-                @selected=${this._onHeatingSystemTypeChange}
-                @closed=${(e: Event) => e.stopPropagation()}
-                fixedMenuPosition
-                style="width: 100%;"
-              >
-                <ha-list-item value="standard"
-                  >${localize("devices.system_type_none", this.hass.language)}</ha-list-item
-                >
-                <ha-list-item value="radiator"
-                  >${localize("devices.system_type_radiator", this.hass.language)}</ha-list-item
-                >
-                <ha-list-item value="underfloor"
-                  >${localize("devices.system_type_underfloor", this.hass.language)}</ha-list-item
-                >
-              </ha-select>
-              ${this._showBoostHint
-                ? html`
-                    <div class="boost-hint">
-                      <ha-icon icon="mdi:information-outline"></ha-icon>
-                      <span
-                        >${localize(
-                          "devices.heating_system_type_boost_hint",
-                          this.hass.language,
-                        )}</span
-                      >
-                    </div>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
+            `
+          : nothing
+      }
     `;
   }
 
@@ -598,27 +635,42 @@ export class RsDeviceSection extends LitElement {
         <div class="master-info">
           <div class="master-name-row">
             <span class="master-name">${friendlyName}</span>
-            ${external
-              ? html`<span class="external-badge"
-                  >${localize("devices.other_area", this.hass.language)}</span
-                >`
-              : nothing}
+            ${
+              external
+                ? html`<span class="external-badge"
+                    >${localize("devices.other_area", this.hass.language)}</span
+                  >`
+                : nothing
+            }
           </div>
           <div class="master-meta">
             ${typeLabel ? html`<span class="type-pill">${typeLabel}</span>` : nothing}
-            ${device?.idle_action && device.idle_action !== "off"
-              ? html`<span class="meta-pill"
-                  >${localize(
-                    `devices.idle_action_${device.idle_action}`,
-                    this.hass.language,
-                  )}</span
-                >`
-              : nothing}
-            ${device?.setpoint_mode === "direct" && this.selectedTempSensor
-              ? html`<span class="meta-pill"
-                  >${localize("devices.setpoint_mode_direct", this.hass.language)}</span
-                >`
-              : nothing}
+            ${
+              device?.idle_action && device.idle_action !== "off"
+                ? html`<span class="meta-pill"
+                    >${localize(
+                      `devices.idle_action_${device.idle_action}`,
+                      this.hass.language,
+                    )}</span
+                  >`
+                : nothing
+            }
+            ${
+              isAc &&
+              (device?.coil_dry === "on" ||
+                (device?.coil_dry !== "off" && this.coilDryEnabledGlobal))
+                ? html`<span class="meta-pill"
+                    >${localize("devices.coil_dry_summary", this.hass.language)}</span
+                  >`
+                : nothing
+            }
+            ${
+              device?.setpoint_mode === "direct" && this.selectedTempSensor
+                ? html`<span class="meta-pill"
+                    >${localize("devices.setpoint_mode_direct", this.hass.language)}</span
+                  >`
+                : nothing
+            }
           </div>
         </div>
       </div>
@@ -671,158 +723,310 @@ export class RsDeviceSection extends LitElement {
           <ha-list-item value="ac">${localize("devices.type_ac", lang)}</ha-list-item>
           <ha-list-item value="electric">${localize("devices.type_electric", lang)}</ha-list-item>
         </ha-select>
-        ${device.type === "electric"
-          ? html`<div class="field-hint">${localize("devices.type_electric_hint", lang)}</div>`
-          : nothing}
+        ${
+          device.type === "electric"
+            ? html`<div class="field-hint">${localize("devices.type_electric_hint", lang)}</div>`
+            : nothing
+        }
       </div>
 
-      ${isAc
-        ? html`
-            <div class="detail-field">
-              <ha-select
-                .label=${localize("devices.idle_action", lang)}
-                .value=${device.idle_action ?? "off"}
-                .options=${[
-                  { value: "off", label: localize("devices.idle_action_off", lang) },
-                  ...(supportsFanOnly
-                    ? [
-                        {
-                          value: "fan_only",
-                          label: localize("devices.idle_action_fan_only", lang),
-                        },
-                      ]
-                    : []),
-                  { value: "setback", label: localize("devices.idle_action_setback", lang) },
-                ]}
-                @selected=${(e: Event) => this._onIdleActionChange(entityId, getSelectValue(e)!)}
-                @closed=${(e: Event) => e.stopPropagation()}
-                fixedMenuPosition
-              >
-                <ha-list-item value="off"
-                  >${localize("devices.idle_action_off", lang)}</ha-list-item
+      ${
+        isAc
+          ? html`
+              <div class="detail-field">
+                <ha-select
+                  .label=${localize("devices.idle_action", lang)}
+                  .value=${device.idle_action ?? "off"}
+                  .options=${[
+                    { value: "off", label: localize("devices.idle_action_off", lang) },
+                    ...(supportsFanOnly
+                      ? [
+                          {
+                            value: "fan_only",
+                            label: localize("devices.idle_action_fan_only", lang),
+                          },
+                        ]
+                      : []),
+                    { value: "setback", label: localize("devices.idle_action_setback", lang) },
+                  ]}
+                  @selected=${(e: Event) => this._onIdleActionChange(entityId, getSelectValue(e)!)}
+                  @closed=${(e: Event) => e.stopPropagation()}
+                  fixedMenuPosition
                 >
-                ${supportsFanOnly
-                  ? html`<ha-list-item value="fan_only"
-                      >${localize("devices.idle_action_fan_only", lang)}</ha-list-item
-                    >`
-                  : nothing}
-                <ha-list-item value="setback"
-                  >${localize("devices.idle_action_setback", lang)}</ha-list-item
-                >
-              </ha-select>
-            </div>
-            ${device.idle_action === "fan_only"
-              ? html`<div class="detail-field">
-                  <ha-select
-                    .label=${localize("devices.idle_fan_mode", lang)}
-                    .value=${device.idle_fan_mode === ""
-                      ? "__keep__"
-                      : (device.idle_fan_mode ?? "low")}
-                    .options=${[
-                      { value: "__keep__", label: localize("devices.idle_fan_mode_keep", lang) },
-                      ...((entityState?.attributes?.fan_modes ?? []) as string[]).map((fm) => ({
-                        value: fm,
-                        label: fm,
-                      })),
-                    ]}
-                    @selected=${(e: Event) => {
-                      const v = getSelectValue(e);
-                      this._onIdleFanModeChange(entityId, v === "__keep__" ? "" : v);
-                    }}
-                    @closed=${(e: Event) => e.stopPropagation()}
-                    fixedMenuPosition
+                  <ha-list-item value="off"
+                    >${localize("devices.idle_action_off", lang)}</ha-list-item
                   >
-                    <ha-list-item value="__keep__"
-                      >${localize("devices.idle_fan_mode_keep", lang)}</ha-list-item
-                    >
-                    ${((entityState?.attributes?.fan_modes ?? []) as string[]).map(
-                      (fm) => html`<ha-list-item value="${fm}">${fm}</ha-list-item>`,
-                    )}
-                  </ha-select>
-                </div>`
-              : nothing}
-          `
-        : nothing}
-      ${isThermostat
-        ? html`
-            <div class="detail-field with-info">
-              <ha-select
-                .label=${localize("devices.idle_action", lang)}
-                .value=${device.idle_action ?? "off"}
-                .options=${[
-                  { value: "off", label: localize("devices.idle_action_off", lang) },
-                  { value: "low", label: localize("devices.idle_action_low", lang) },
-                ]}
-                @selected=${(e: Event) => this._onIdleActionChange(entityId, getSelectValue(e)!)}
-                @closed=${(e: Event) => e.stopPropagation()}
-                fixedMenuPosition
-              >
-                <ha-list-item value="off"
-                  >${localize("devices.idle_action_off", lang)}</ha-list-item
-                >
-                <ha-list-item value="low"
-                  >${localize("devices.idle_action_low", lang)}</ha-list-item
-                >
-              </ha-select>
-              ${device.idle_action === "low"
-                ? html`<rs-info-icon
-                    .text=${localize("devices.idle_action_low_hint", lang)}
-                  ></rs-info-icon>`
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${this.selectedTempSensor
-        ? html`
-            <div class="detail-field with-info">
-              <ha-select
-                .label=${localize("devices.setpoint_mode", lang)}
-                .value=${device.setpoint_mode ?? "proportional"}
-                .options=${[
-                  {
-                    value: "proportional",
-                    label: localize("devices.setpoint_mode_proportional", lang),
-                  },
-                  {
-                    value: "direct",
-                    label: localize("devices.setpoint_mode_direct", lang),
-                  },
-                ]}
-                @selected=${(e: Event) => this._onSetpointModeChange(entityId, getSelectValue(e)!)}
-                @closed=${(e: Event) => e.stopPropagation()}
-                fixedMenuPosition
-              >
-                <ha-list-item value="proportional"
-                  >${localize("devices.setpoint_mode_proportional", lang)}</ha-list-item
-                >
-                <ha-list-item value="direct"
-                  >${localize("devices.setpoint_mode_direct", lang)}</ha-list-item
-                >
-              </ha-select>
-              <rs-info-icon .text=${localize("devices.setpoint_mode_hint", lang)}></rs-info-icon>
-            </div>
-          `
-        : nothing}
-      ${isThermostat && this.valveProtectionEnabled
-        ? html`
-            <div class="detail-toggle-row">
-              <ha-checkbox
-                .checked=${isExcluded}
-                @change=${(e: Event) => {
-                  const target = e.target as HTMLElement & { checked: boolean };
-                  this._onValveProtectionExcludeToggle(entityId, target.checked);
-                }}
-              ></ha-checkbox>
-              <div class="detail-toggle-label">
-                <ha-icon icon="mdi:shield-off-outline"></ha-icon>
-                ${localize("devices.valve_protection_excluded", lang)}
-                <rs-info-icon
-                  .text=${localize("devices.valve_protection_exclude_hint", lang)}
-                ></rs-info-icon>
+                  ${
+                    supportsFanOnly
+                      ? html`<ha-list-item value="fan_only"
+                          >${localize("devices.idle_action_fan_only", lang)}</ha-list-item
+                        >`
+                      : nothing
+                  }
+                  <ha-list-item value="setback"
+                    >${localize("devices.idle_action_setback", lang)}</ha-list-item
+                  >
+                </ha-select>
               </div>
-            </div>
-          `
-        : nothing}
+              ${
+                device.idle_action === "fan_only"
+                  ? html`<div class="detail-field">
+                      <ha-select
+                        .label=${localize("devices.idle_fan_mode", lang)}
+                        .value=${
+                          device.idle_fan_mode === "" ? "__keep__" : (device.idle_fan_mode ?? "low")
+                        }
+                        .options=${[
+                          {
+                            value: "__keep__",
+                            label: localize("devices.idle_fan_mode_keep", lang),
+                          },
+                          ...((entityState?.attributes?.fan_modes ?? []) as string[]).map((fm) => ({
+                            value: fm,
+                            label: fm,
+                          })),
+                        ]}
+                        @selected=${(e: Event) => {
+                          const v = getSelectValue(e);
+                          this._onIdleFanModeChange(entityId, v === "__keep__" ? "" : v);
+                        }}
+                        @closed=${(e: Event) => e.stopPropagation()}
+                        fixedMenuPosition
+                      >
+                        <ha-list-item value="__keep__"
+                          >${localize("devices.idle_fan_mode_keep", lang)}</ha-list-item
+                        >
+                        ${((entityState?.attributes?.fan_modes ?? []) as string[]).map(
+                          (fm) => html`<ha-list-item value="${fm}">${fm}</ha-list-item>`,
+                        )}
+                      </ha-select>
+                    </div>`
+                  : nothing
+              }
+
+              <div class="detail-field">
+                <ha-select
+                  .label=${localize("devices.coil_dry", lang)}
+                  .value=${device.coil_dry ?? "inherit"}
+                  .options=${[
+                    { value: "inherit", label: localize("devices.coil_dry_inherit", lang) },
+                    { value: "on", label: localize("devices.coil_dry_on", lang) },
+                    { value: "off", label: localize("devices.coil_dry_off", lang) },
+                  ]}
+                  @selected=${(e: Event) => this._onCoilDryChange(entityId, getSelectValue(e))}
+                  @closed=${(e: Event) => e.stopPropagation()}
+                  fixedMenuPosition
+                >
+                  <ha-list-item value="inherit"
+                    >${localize("devices.coil_dry_inherit", lang)}</ha-list-item
+                  >
+                  <ha-list-item value="on">${localize("devices.coil_dry_on", lang)}</ha-list-item>
+                  <ha-list-item value="off">${localize("devices.coil_dry_off", lang)}</ha-list-item>
+                </ha-select>
+              </div>
+
+              ${
+                (device.coil_dry ?? "inherit") === "inherit" && !this.coilDryEnabledGlobal
+                  ? html`
+                      <div class="boost-hint">
+                        <ha-icon icon="mdi:information-outline"></ha-icon>
+                        <span>${localize("devices.coil_dry_global_off_hint", lang)}</span>
+                      </div>
+                    `
+                  : nothing
+              }
+              ${
+                (device.coil_dry ?? "inherit") !== "off"
+                  ? html`
+                      <div class="detail-field">
+                        <ha-textfield
+                          .value=${String(device.coil_dry_minutes ?? 0)}
+                          .label=${localize("devices.coil_dry_minutes", lang, {
+                            minutes: this.coilDryMinutesGlobal,
+                          })}
+                          type="number"
+                          step="1"
+                          min="0"
+                          max="60"
+                          @change=${(e: Event) => {
+                            const v = parseInt((e.target as HTMLInputElement).value, 10);
+                            if (!isNaN(v) && v >= 0 && v <= 60)
+                              this._onCoilDryMinutesChange(entityId, v);
+                          }}
+                        ></ha-textfield>
+                      </div>
+
+                      <div class="detail-field with-info">
+                        <ha-select
+                          .label=${localize("devices.coil_dry_mode", lang)}
+                          .value=${device.coil_dry_mode || INHERIT}
+                          .options=${[
+                            {
+                              value: INHERIT,
+                              label: localize("devices.coil_dry_mode_inherit", lang, {
+                                value: this.coilDryModeGlobal,
+                              }),
+                            },
+                            { value: "fan_only", label: "fan_only" },
+                            { value: "dry", label: "dry" },
+                          ]}
+                          @selected=${(e: Event) =>
+                            this._onCoilDryModeChange(entityId, fromInherit(getSelectValue(e)))}
+                          @closed=${(e: Event) => e.stopPropagation()}
+                          fixedMenuPosition
+                        >
+                          <ha-list-item value="${INHERIT}"
+                            >${localize("devices.coil_dry_mode_inherit", lang, {
+                              value: this.coilDryModeGlobal,
+                            })}</ha-list-item
+                          >
+                          <ha-list-item value="fan_only">fan_only</ha-list-item>
+                          <ha-list-item value="dry">dry</ha-list-item>
+                        </ha-select>
+                        ${
+                          device.coil_dry_mode === "dry"
+                            ? html`<rs-info-icon
+                                icon="mdi:alert-outline"
+                                .text=${localize("coil_dry.mode_dry_warning", lang)}
+                              ></rs-info-icon>`
+                            : nothing
+                        }
+                      </div>
+
+                      <div class="detail-field">
+                        <ha-select
+                          .label=${localize("devices.coil_dry_fan_mode", lang)}
+                          .value=${device.coil_dry_fan_mode || INHERIT}
+                          .options=${[
+                            {
+                              value: INHERIT,
+                              label: localize("devices.coil_dry_fan_mode_inherit", lang, {
+                                value: this._globalFanModeLabel(lang),
+                              }),
+                            },
+                            {
+                              value: "__keep__",
+                              label: localize("devices.coil_dry_fan_mode_keep", lang),
+                            },
+                            ...((entityState?.attributes?.fan_modes ?? []) as string[]).map(
+                              (fm) => ({
+                                value: fm,
+                                label: fm,
+                              }),
+                            ),
+                          ]}
+                          @selected=${(e: Event) =>
+                            this._onCoilDryFanModeChange(entityId, fromInherit(getSelectValue(e)))}
+                          @closed=${(e: Event) => e.stopPropagation()}
+                          fixedMenuPosition
+                        >
+                          <ha-list-item value="${INHERIT}"
+                            >${localize("devices.coil_dry_fan_mode_inherit", lang, {
+                              value: this._globalFanModeLabel(lang),
+                            })}</ha-list-item
+                          >
+                          <ha-list-item value="__keep__"
+                            >${localize("devices.coil_dry_fan_mode_keep", lang)}</ha-list-item
+                          >
+                          ${((entityState?.attributes?.fan_modes ?? []) as string[]).map(
+                            (fm) => html`<ha-list-item value="${fm}">${fm}</ha-list-item>`,
+                          )}
+                        </ha-select>
+                      </div>
+                    `
+                  : nothing
+              }
+            `
+          : nothing
+      }
+      ${
+        isThermostat
+          ? html`
+              <div class="detail-field with-info">
+                <ha-select
+                  .label=${localize("devices.idle_action", lang)}
+                  .value=${device.idle_action ?? "off"}
+                  .options=${[
+                    { value: "off", label: localize("devices.idle_action_off", lang) },
+                    { value: "low", label: localize("devices.idle_action_low", lang) },
+                  ]}
+                  @selected=${(e: Event) => this._onIdleActionChange(entityId, getSelectValue(e)!)}
+                  @closed=${(e: Event) => e.stopPropagation()}
+                  fixedMenuPosition
+                >
+                  <ha-list-item value="off"
+                    >${localize("devices.idle_action_off", lang)}</ha-list-item
+                  >
+                  <ha-list-item value="low"
+                    >${localize("devices.idle_action_low", lang)}</ha-list-item
+                  >
+                </ha-select>
+                ${
+                  device.idle_action === "low"
+                    ? html`<rs-info-icon
+                        .text=${localize("devices.idle_action_low_hint", lang)}
+                      ></rs-info-icon>`
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
+      ${
+        this.selectedTempSensor
+          ? html`
+              <div class="detail-field with-info">
+                <ha-select
+                  .label=${localize("devices.setpoint_mode", lang)}
+                  .value=${device.setpoint_mode ?? "proportional"}
+                  .options=${[
+                    {
+                      value: "proportional",
+                      label: localize("devices.setpoint_mode_proportional", lang),
+                    },
+                    {
+                      value: "direct",
+                      label: localize("devices.setpoint_mode_direct", lang),
+                    },
+                  ]}
+                  @selected=${(e: Event) => this._onSetpointModeChange(entityId, getSelectValue(e)!)}
+                  @closed=${(e: Event) => e.stopPropagation()}
+                  fixedMenuPosition
+                >
+                  <ha-list-item value="proportional"
+                    >${localize("devices.setpoint_mode_proportional", lang)}</ha-list-item
+                  >
+                  <ha-list-item value="direct"
+                    >${localize("devices.setpoint_mode_direct", lang)}</ha-list-item
+                  >
+                </ha-select>
+                <rs-info-icon .text=${localize("devices.setpoint_mode_hint", lang)}></rs-info-icon>
+              </div>
+            `
+          : nothing
+      }
+      ${
+        isThermostat && this.valveProtectionEnabled
+          ? html`
+              <div class="detail-toggle-row">
+                <ha-checkbox
+                  .checked=${isExcluded}
+                  @change=${(e: Event) => {
+                    const target = e.target as HTMLElement & { checked: boolean };
+                    this._onValveProtectionExcludeToggle(entityId, target.checked);
+                  }}
+                ></ha-checkbox>
+                <div class="detail-toggle-label">
+                  <ha-icon icon="mdi:shield-off-outline"></ha-icon>
+                  ${localize("devices.valve_protection_excluded", lang)}
+                  <rs-info-icon
+                    .text=${localize("devices.valve_protection_exclude_hint", lang)}
+                  ></rs-info-icon>
+                </div>
+              </div>
+            `
+          : nothing
+      }
     `;
   }
 
@@ -879,6 +1083,12 @@ export class RsDeviceSection extends LitElement {
       if (deviceType === "electric") {
         updated.heating_system_type = "";
       }
+      // coil_dry="on" is AC-only (no evaporator coil on a TRV or electric heater);
+      // the backend schema rejects it. Reset when switching away from AC so the
+      // next save does not fail.
+      if (deviceType !== "ac" && updated.coil_dry === "on") {
+        updated.coil_dry = "inherit";
+      }
       return updated;
     });
     this._fireDeviceChanged(newDevices);
@@ -918,6 +1128,41 @@ export class RsDeviceSection extends LitElement {
       d.entity_id === entityId ? { ...d, setpoint_mode: mode as "proportional" | "direct" } : d,
     );
     this._fireDeviceChanged(newDevices);
+  }
+
+  /** Global fan mode as shown in the inherit option ("" means keep current). */
+  private _globalFanModeLabel(lang: string): string {
+    return this.coilDryFanModeGlobal === ""
+      ? localize("devices.coil_dry_fan_mode_keep", lang)
+      : this.coilDryFanModeGlobal;
+  }
+
+  private _onCoilDryChange(entityId: string, value: string) {
+    this._fireDeviceChanged(
+      this.devices.map((d) =>
+        d.entity_id === entityId ? { ...d, coil_dry: value as "inherit" | "on" | "off" } : d,
+      ),
+    );
+  }
+
+  private _onCoilDryMinutesChange(entityId: string, minutes: number) {
+    this._fireDeviceChanged(
+      this.devices.map((d) => (d.entity_id === entityId ? { ...d, coil_dry_minutes: minutes } : d)),
+    );
+  }
+
+  private _onCoilDryModeChange(entityId: string, value: string) {
+    this._fireDeviceChanged(
+      this.devices.map((d) =>
+        d.entity_id === entityId ? { ...d, coil_dry_mode: value as "" | "fan_only" | "dry" } : d,
+      ),
+    );
+  }
+
+  private _onCoilDryFanModeChange(entityId: string, value: string) {
+    this._fireDeviceChanged(
+      this.devices.map((d) => (d.entity_id === entityId ? { ...d, coil_dry_fan_mode: value } : d)),
+    );
   }
 
   private _onHeatingSystemTypeChange(e: Event) {

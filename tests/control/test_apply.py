@@ -4384,3 +4384,221 @@ async def test_apply_idle_forced_on_set_temperature_has_no_hvac_mode():
     temp_calls = _temp_calls(hass, "climate.ac")
     assert temp_calls
     assert "hvac_mode" not in temp_calls[0][0][2]
+
+
+def _ac_room():
+    """Room with one TRV and one AC, both in devices[]."""
+    room = make_room(acs=["climate.living_ac"])
+    return room
+
+
+def _ac_state(hvac_modes=None):
+    state = MagicMock()
+    state.state = "off"
+    state.attributes = {
+        "hvac_modes": hvac_modes if hvac_modes is not None else ["off", "cool", "heat", "fan_only"],
+        "fan_modes": ["auto", "low", "high"],
+        "fan_mode": "auto",
+        "min_temp": 16.0,
+        "max_temp": 30.0,
+        "temperature": 22.0,
+    }
+    return state
+
+
+def _targeted_entities(hass):
+    """Entity IDs of every climate service call."""
+    return {
+        c[0][2]["entity_id"]
+        for c in hass.services.async_call.call_args_list
+        if c[0][0] == "climate" and "entity_id" in c[0][2]
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "has_external_sensor", "climate_mode"),
+    [
+        ("cooling", True, "auto"),
+        ("heating", True, "auto"),
+        ("idle", True, "auto"),
+        ("cooling", False, "auto"),  # managed mode branch
+    ],
+)
+async def test_exclude_eids_filters_acs(mode, has_external_sensor, climate_mode):
+    """An excluded AC must receive no command in any async_apply branch."""
+    clear_command_cache()
+    hass = build_hass()
+    hass.states.get = MagicMock(return_value=_ac_state())
+    room = _ac_room()
+    room["climate_mode"] = climate_mode
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=25.0,
+        settings={"outdoor_cooling_min": 10},
+        has_external_sensor=has_external_sensor,
+    )
+
+    await ctrl.async_apply(
+        mode,
+        TargetTemps(heat=21.0, cool=24.0),
+        current_temp=26.0,
+        exclude_eids={"climate.living_ac"},
+    )
+
+    assert "climate.living_ac" not in _targeted_entities(hass)
+
+
+@pytest.mark.asyncio
+async def test_exclude_eids_still_commands_other_devices():
+    """Excluding the AC must not stop the TRV from being commanded."""
+    clear_command_cache()
+    hass = build_hass()
+    hass.states.get = MagicMock(return_value=_ac_state())
+    ctrl = MPCController(
+        hass,
+        _ac_room(),
+        model_manager=RoomModelManager(),
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+    )
+
+    await ctrl.async_apply(
+        "heating",
+        TargetTemps(heat=21.0, cool=24.0),
+        current_temp=18.0,
+        exclude_eids={"climate.living_ac"},
+    )
+
+    targeted = _targeted_entities(hass)
+    assert "climate.living_trv" in targeted
+    assert "climate.living_ac" not in targeted
+
+
+# ---------------------------------------------------------------------------
+# Managed mode: directed commands must not borrow the opposite target
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_never_cools_towards_heat_target():
+    """A heat-only dead-band must not turn into a cool command at the heat target.
+
+    A custom override may carry heat without cool while the room stays in auto
+    mode, so can_cool is still True. Sending "cool" at the heating setpoint
+    would drive the room down to it.
+    """
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": ["cool", "heat"], "temperature": None}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(
+        thermostats=["climate.trv1"],
+        acs=["climate.ac1"],
+        climate_mode="auto",
+        temperature_sensor="",
+    )
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=20.0,
+        settings={},
+        has_external_sensor=False,
+    )
+
+    await ctrl.async_apply("heating", targets=TargetTemps(heat=21.0, cool=None))
+
+    calls = hass.services.async_call.call_args_list
+    ac_calls = [c for c in calls if c[0][2].get("entity_id") == "climate.ac1"]
+    assert not any(c[0][2].get("hvac_mode") == "cool" for c in ac_calls)
+    assert any(
+        c[0][1] == "set_temperature" and c[0][2].get("temperature") == 21.0 and c[0][2].get("hvac_mode") == "heat"
+        for c in ac_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_single_setpoint_heat_cool_uses_directed_mode():
+    """A single-setpoint heat_cool device regulates onto the one value it gets.
+
+    With only a heating target that would make it cool the room down to the
+    heating setpoint, so the directed heat mode is used instead.
+    """
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": ["off", "heat_cool", "cool", "heat"], "temperature": None}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(
+        thermostats=["climate.trv1"],
+        acs=["climate.ac1"],
+        climate_mode="auto",
+        temperature_sensor="",
+    )
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=20.0,
+        settings={},
+        has_external_sensor=False,
+    )
+
+    await ctrl.async_apply("heating", targets=TargetTemps(heat=21.0, cool=None))
+
+    ac_calls = [c for c in hass.services.async_call.call_args_list if c[0][2].get("entity_id") == "climate.ac1"]
+    assert not any(c[0][2].get("hvac_mode") == "heat_cool" for c in ac_calls)
+    assert any(
+        c[0][1] == "set_temperature" and c[0][2].get("temperature") == 21.0 and c[0][2].get("hvac_mode") == "heat"
+        for c in ac_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_range_device_parks_unused_side_on_its_limit():
+    """A range device can express a one-sided band without collapsing it."""
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "heat_cool"
+    ac_state.attributes = {
+        "hvac_modes": ["off", "heat_cool"],
+        "target_temp_low": 18.0,
+        "target_temp_high": 28.0,
+        "min_temp": 16.0,
+        "max_temp": 30.0,
+        "temperature": None,
+    }
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(
+        thermostats=["climate.trv1"],
+        acs=["climate.ac1"],
+        climate_mode="auto",
+        temperature_sensor="",
+    )
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=20.0,
+        settings={},
+        has_external_sensor=False,
+    )
+
+    await ctrl.async_apply("heating", targets=TargetTemps(heat=21.0, cool=None))
+
+    ranges = [
+        c[0][2]
+        for c in hass.services.async_call.call_args_list
+        if c[0][2].get("entity_id") == "climate.ac1" and "target_temp_low" in c[0][2]
+    ]
+    assert ranges, "range device must receive a band, not a single setpoint"
+    assert ranges[-1]["target_temp_low"] == 21.0
+    assert ranges[-1]["target_temp_high"] == 30.0

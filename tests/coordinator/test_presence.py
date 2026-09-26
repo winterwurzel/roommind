@@ -185,7 +185,7 @@ class TestPresenceDetection:
         assert room["presence_away"] is False
 
     @pytest.mark.asyncio
-    async def test_person_entity_missing_treated_as_home(self, hass, mock_config_entry):
+    async def test_person_entity_missing_treated_as_home(self, hass, mock_config_entry, monkeypatch):
         """Missing person entity (None) treated as home (fail-safe)."""
         store = _make_store_mock({"living_room_abc12345": SAMPLE_ROOM})
         store.get_settings.return_value = {
@@ -193,6 +193,14 @@ class TestPresenceDetection:
             "presence_persons": ["person.nonexistent"],
         }
         hass.data = {"roommind": {"store": store}}
+        hass.is_running = True
+        # The entity is gone for good: not in the state machine, not registered.
+        registry = MagicMock()
+        registry.async_get = MagicMock(return_value=None)
+        monkeypatch.setattr(
+            "custom_components.roommind.utils.presence_utils.er.async_get",
+            lambda _hass: registry,
+        )
 
         # person.nonexistent not in any dict -> returns None (fail-safe: treated as home)
         hass.states.get = MagicMock(side_effect=make_mock_states_get())

@@ -1139,3 +1139,130 @@ def test_deferred_guard_does_not_fight_the_overshoot_guard(monkeypatch):
 
     assert mode == MODE_IDLE
     assert pf == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Occupancy is kept out of the shading peak (#418)
+# ---------------------------------------------------------------------------
+
+
+def _occupancy_controller(q_occupancy: float) -> MPCController:
+    """Controller whose model has a strong occupancy gain and a slow room."""
+    mgr = RoomModelManager()
+    mgr.get_model = MagicMock(return_value=RCModel(C=1.0, U=0.25, Q_heat=1.0, Q_cool=1.0, Q_occupancy=1.46))
+    return MPCController(
+        build_hass(),
+        make_room(),
+        model_manager=mgr,
+        outdoor_temp=24.0,
+        settings={},
+        has_external_sensor=True,
+        q_occupancy=q_occupancy,
+    )
+
+
+def test_simulate_plan_reproduces_the_plan_it_replays():
+    """Replaying a plan with its own inputs must return the plan's trajectory."""
+    from custom_components.roommind.control.mpc_optimizer import MPCOptimizer
+
+    model = RCModel(C=1.0, U=0.25, Q_heat=1.0, Q_cool=1.0, Q_occupancy=1.46)
+    optimizer = MPCOptimizer(model=model, can_heat=True, can_cool=True)
+    outdoor = [24.0] * 24
+    solar = [0.2] * 24
+    residual = [0.3] * 24
+    occupancy = [1.0] * 24
+    plan = optimizer.optimize(
+        T_room=22.0,
+        T_outdoor_series=outdoor,
+        heat_target_series=[21.0] * 24,
+        cool_target_series=[24.0] * 24,
+        dt_minutes=5,
+        solar_series=solar,
+        residual_series=residual,
+        occupancy_series=occupancy,
+    )
+
+    replayed = optimizer.simulate_plan(
+        plan,
+        22.0,
+        outdoor,
+        5,
+        solar_series=solar,
+        residual_series=residual,
+        occupancy_series=occupancy,
+    )
+    assert replayed == plan.temperatures
+
+
+def test_predicted_peak_excludes_occupancy_heat():
+    """The shading peak must not carry body heat, the control plan still does."""
+    ctrl = _occupancy_controller(1.0)
+    ctrl._evaluate_mpc(22.0, TargetTemps(heat=21.0, cool=24.0))
+
+    assert ctrl.last_plan is not None
+    plan_peak = max(ctrl.last_plan.temperatures[1:])
+    assert ctrl.predicted_peak_temp is not None
+    assert ctrl.predicted_peak_temp < plan_peak - 1.0
+
+
+def test_control_plan_still_sees_occupancy():
+    """Removing occupancy from the peak must not change the control decision."""
+    occupied = _occupancy_controller(1.0)
+    empty = _occupancy_controller(0.0)
+    occupied._evaluate_mpc(22.0, TargetTemps(heat=21.0, cool=24.0))
+    empty._evaluate_mpc(22.0, TargetTemps(heat=21.0, cool=24.0))
+
+    assert occupied.last_plan is not None and empty.last_plan is not None
+    # The optimizer's own trajectory diverges because it still gets the gain.
+    assert max(occupied.last_plan.temperatures[1:]) > max(empty.last_plan.temperatures[1:])
+
+
+def test_predicted_peak_matches_empty_room_peak():
+    """An occupied and an empty room must offer the cover logic the same peak."""
+    occupied = _occupancy_controller(1.0)
+    empty = _occupancy_controller(0.0)
+    occupied._evaluate_mpc(22.0, TargetTemps(heat=21.0, cool=24.0))
+    empty._evaluate_mpc(22.0, TargetTemps(heat=21.0, cool=24.0))
+
+    assert occupied.predicted_peak_temp == pytest.approx(empty.predicted_peak_temp, abs=0.05)
+
+
+def test_unoccupied_room_uses_the_plan_trajectory_directly():
+    """Without occupancy there is nothing to subtract, so no replay happens."""
+    ctrl = _occupancy_controller(0.0)
+    ctrl._evaluate_mpc(22.0, TargetTemps(heat=21.0, cool=24.0))
+
+    assert ctrl._peak_temps_unoccupied is None
+    assert ctrl.last_plan is not None
+    assert ctrl.predicted_peak_temp == max(ctrl.last_plan.temperatures[1:])
+
+
+def test_simulate_plan_replays_directed_actions():
+    """Heating and cooling blocks must replay with their power, not as idle."""
+    from custom_components.roommind.control.mpc_optimizer import MPCOptimizer
+
+    model = RCModel(C=1.0, U=0.25, Q_heat=1.0, Q_cool=2.0, Q_occupancy=1.0)
+    optimizer = MPCOptimizer(model=model, can_heat=False, can_cool=True)
+    plan = MPCPlan(
+        actions=[MODE_COOLING] * 4,
+        temperatures=[28.0] * 5,
+        power_fractions=[1.0] * 4,
+    )
+    replayed = optimizer.simulate_plan(plan, 28.0, [30.0] * 4, 5)
+
+    assert replayed[0] == 28.0
+    assert replayed[-1] < 28.0  # cooling actually removed heat
+
+    heat_plan = MPCPlan(
+        actions=[MODE_HEATING] * 4,
+        temperatures=[18.0] * 5,
+        power_fractions=[1.0] * 4,
+    )
+    idle_plan = MPCPlan(
+        actions=[MODE_IDLE] * 4,
+        temperatures=[18.0] * 5,
+        power_fractions=[0.0] * 4,
+    )
+    heated = optimizer.simulate_plan(heat_plan, 18.0, [10.0] * 4, 5)
+    idled = optimizer.simulate_plan(idle_plan, 18.0, [10.0] * 4, 5)
+    assert heated[-1] > idled[-1]

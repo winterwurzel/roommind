@@ -1,17 +1,23 @@
 import { html, css, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import type { ScheduleEntry, ClimateMode } from "../types";
+import type { ScheduleEntry, ClimateMode, ScheduleTempWarning } from "../types";
 import { localize } from "../utils/localize";
 import {
   formatTemp,
   tempUnit,
   toDisplay,
   toCelsius,
+  isPlausibleTargetTemp,
+  MIN_TARGET_TEMP_C,
+  MAX_TARGET_TEMP_C,
   tempStep,
   tempRange,
 } from "../utils/temperature";
 import { RsScheduleBase } from "./shared/rs-schedule-base";
 import { inputStyles } from "../styles/input-styles";
+
+/** Mirrors _WEEKDAYS in the backend's schedule_utils.py. */
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
 @customElement("rs-schedule-settings")
 export class RsScheduleSettings extends RsScheduleBase {
@@ -35,6 +41,7 @@ export class RsScheduleSettings extends RsScheduleBase {
   @property({ type: Number }) public ecoHeat = 17.0;
   @property({ type: Number }) public ecoCool = 27.0;
   @property({ type: String }) public climateMode: ClimateMode = "auto";
+  @property({ attribute: false }) public scheduleTempWarnings: ScheduleTempWarning[] = [];
 
   static styles = [
     RsScheduleBase.sharedStyles,
@@ -139,74 +146,83 @@ export class RsScheduleSettings extends RsScheduleBase {
     const hasMultiple = this.schedules.length >= 2;
 
     return html`
-      ${this.schedules.length > 0
-        ? html`
-            <div class="schedule-list">
-              ${this.schedules.map((schedule, index) => {
-                const state = this._getScheduleState(index, this.schedules.length);
-                return html`
-                  <div class="schedule-row ${state}">
-                    ${hasMultiple
-                      ? html`<span class="schedule-number">${index + 1}</span>`
-                      : nothing}
-                    <span class="schedule-status-dot"></span>
-                    <span
-                      class="schedule-name schedule-link"
-                      @click=${() => this._openEntityInfo(schedule.entity_id)}
-                      >${this._getFriendlyName(schedule.entity_id)}</span
-                    >
-                    <span class="schedule-status">${this._getStatusText(index, state)}</span>
-                  </div>
-                `;
-              })}
-            </div>
-          `
-        : html`<div class="no-schedules">${localize("schedule.no_schedules", l)}</div>`}
-      ${this.climateMode === "auto"
-        ? html`
-            <div class="view-temps">
-              ${localize("schedule.view_heat", l, {
-                comfort: formatTemp(this.comfortHeat, this.hass),
-                eco: formatTemp(this.ecoHeat, this.hass),
-                unit: tempUnit(this.hass),
-              })}
-               · 
-              ${localize("schedule.view_cool", l, {
-                comfort: formatTemp(this.comfortCool, this.hass),
-                eco: formatTemp(this.ecoCool, this.hass),
-                unit: tempUnit(this.hass),
-              })}
-            </div>
-          `
-        : html`
-            <div class="view-temps">
-              ${localize("schedule.view_comfort", l, {
-                temp: formatTemp(
-                  this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat,
-                  this.hass,
-                ),
-                unit: tempUnit(this.hass),
-              })}
-               · 
-              ${localize("schedule.view_eco", l, {
-                temp: formatTemp(
-                  this.climateMode === "cool_only" ? this.ecoCool : this.ecoHeat,
-                  this.hass,
-                ),
-                unit: tempUnit(this.hass),
-              })}
-            </div>
-          `}
-      ${this.scheduleSelectorEntity
-        ? html`<div class="view-selector-info">
-            ${localize("schedule.view_selector_prefix", l)}
-            <span
-              class="schedule-link"
-              @click=${() => this._openEntityInfo(this.scheduleSelectorEntity!)}
-              >${this._getFriendlyName(this.scheduleSelectorEntity)}</span
-            >
-          </div>`
-        : nothing}
+      ${
+        this.schedules.length > 0
+          ? html`
+              <div class="schedule-list">
+                ${this.schedules.map((schedule, index) => {
+                  const state = this._getScheduleState(index, this.schedules.length);
+                  return html`
+                    <div class="schedule-row ${state}">
+                      ${
+                        hasMultiple
+                          ? html`<span class="schedule-number">${index + 1}</span>`
+                          : nothing
+                      }
+                      <span class="schedule-status-dot"></span>
+                      <span
+                        class="schedule-name schedule-link"
+                        @click=${() => this._openEntityInfo(schedule.entity_id)}
+                        >${this._getFriendlyName(schedule.entity_id)}</span
+                      >
+                      <span class="schedule-status">${this._getStatusText(index, state)}</span>
+                    </div>
+                    ${this._renderRejectedTempWarning(state)}
+                  `;
+                })}
+              </div>
+            `
+          : html`<div class="no-schedules">${localize("schedule.no_schedules", l)}</div>`
+      }
+      ${
+        this.climateMode === "auto"
+          ? html`
+              <div class="view-temps">
+                ${localize("schedule.view_heat", l, {
+                  comfort: formatTemp(this.comfortHeat, this.hass),
+                  eco: formatTemp(this.ecoHeat, this.hass),
+                  unit: tempUnit(this.hass),
+                })}
+                 · 
+                ${localize("schedule.view_cool", l, {
+                  comfort: formatTemp(this.comfortCool, this.hass),
+                  eco: formatTemp(this.ecoCool, this.hass),
+                  unit: tempUnit(this.hass),
+                })}
+              </div>
+            `
+          : html`
+              <div class="view-temps">
+                ${localize("schedule.view_comfort", l, {
+                  temp: formatTemp(
+                    this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat,
+                    this.hass,
+                  ),
+                  unit: tempUnit(this.hass),
+                })}
+                 · 
+                ${localize("schedule.view_eco", l, {
+                  temp: formatTemp(
+                    this.climateMode === "cool_only" ? this.ecoCool : this.ecoHeat,
+                    this.hass,
+                  ),
+                  unit: tempUnit(this.hass),
+                })}
+              </div>
+            `
+      }
+      ${
+        this.scheduleSelectorEntity
+          ? html`<div class="view-selector-info">
+              ${localize("schedule.view_selector_prefix", l)}
+              <span
+                class="schedule-link"
+                @click=${() => this._openEntityInfo(this.scheduleSelectorEntity!)}
+                >${this._getFriendlyName(this.scheduleSelectorEntity)}</span
+              >
+            </div>`
+          : nothing
+      }
     `;
   }
 
@@ -263,10 +279,53 @@ export class RsScheduleSettings extends RsScheduleBase {
                 (i) => this._removeSchedule(i),
               )}
             </div>
+            ${this._renderRejectedTempWarning(state)}
           `;
         })}
       </div>
     `;
+  }
+
+  /**
+   * Warn about block temperatures the backend discarded (#395).
+   *
+   * Sourced from the backend's whole-week scan, so a typo in the 03:00 block is
+   * visible at any time of day — not just while that block is running. The scan
+   * covers the active schedule only, hence the warning hangs off that row.
+   */
+  private _renderRejectedTempWarning(state: "active" | "inactive" | "unreachable") {
+    if (state !== "active") return nothing;
+    const warnings = this.scheduleTempWarnings ?? [];
+    if (warnings.length === 0) return nothing;
+
+    const range = tempRange(MIN_TARGET_TEMP_C, MAX_TARGET_TEMP_C, this.hass);
+    return html`
+      <div class="inline-warning">
+        <ha-icon icon="mdi:alert-outline"></ha-icon>
+        ${localize("schedule.block_temp_rejected", this.hass.language, {
+          values: warnings.map((w) => this._formatWarning(w)).join(", "),
+          min: range.min,
+          max: range.max,
+          unit: tempUnit(this.hass),
+        })}
+      </div>
+    `;
+  }
+
+  /** "110 (Mon 00:00)" — weekday localised via Intl, so no extra locale keys. */
+  private _formatWarning(w: ScheduleTempWarning): string {
+    const index = WEEKDAYS.indexOf(w.day);
+    let when = w.from.slice(0, 5);
+    if (index >= 0) {
+      // 2024-01-01 was a Monday, so +index lands on the right weekday.
+      const date = new Date(Date.UTC(2024, 0, 1 + index));
+      const weekday = new Intl.DateTimeFormat(this.hass.language, {
+        weekday: "short",
+        timeZone: "UTC",
+      }).format(date);
+      when = `${weekday} ${when}`;
+    }
+    return `${w.value} (${when})`;
   }
 
   // ─── Temperature inputs ────────────────────────────────────────
@@ -342,9 +401,11 @@ export class RsScheduleSettings extends RsScheduleBase {
             )}
             min=${tempRange(5, 35, this.hass).min}
             max=${tempRange(5, 35, this.hass).max}
-            @change=${this.climateMode === "cool_only"
-              ? this._onComfortCoolChange
-              : this._onComfortHeatChange}
+            @change=${
+              this.climateMode === "cool_only"
+                ? this._onComfortCoolChange
+                : this._onComfortHeatChange
+            }
           ></ha-textfield>
         </div>
         <div class="temp-input-group">
@@ -358,9 +419,9 @@ export class RsScheduleSettings extends RsScheduleBase {
             )}
             min=${tempRange(5, 35, this.hass).min}
             max=${tempRange(5, 35, this.hass).max}
-            @change=${this.climateMode === "cool_only"
-              ? this._onEcoCoolChange
-              : this._onEcoHeatChange}
+            @change=${
+              this.climateMode === "cool_only" ? this._onEcoCoolChange : this._onEcoHeatChange
+            }
           ></ha-textfield>
         </div>
       </div>
@@ -385,6 +446,31 @@ export class RsScheduleSettings extends RsScheduleBase {
 
   // ─── Status text (temperature-specific) ────────────────────────
 
+  /**
+   * Read the active block's temperatures from the schedule entity's attributes.
+   *
+   * Implausible values are dropped by the backend (#395), so they must not be
+   * shown as the active target here either. The *warning* about them comes from
+   * `scheduleTempWarnings` instead — the backend scans the whole week, while
+   * these attributes only ever describe the block running right now.
+   */
+  private _readBlockTemps(index: number): {
+    blockTemp?: number;
+    heatTemp?: number;
+    coolTemp?: number;
+  } {
+    const entityState = this.hass?.states?.[this.schedules[index].entity_id];
+    const attrs = entityState?.attributes ?? {};
+    const usable = (v: unknown): number | undefined =>
+      v != null && isPlausibleTargetTemp(v, this.hass) ? (v as number) : undefined;
+
+    return {
+      blockTemp: usable(attrs.temperature),
+      heatTemp: usable(attrs.heat_temperature),
+      coolTemp: usable(attrs.cool_temperature),
+    };
+  }
+
   private _getStatusText(index: number, state: "active" | "inactive" | "unreachable"): string {
     const l = this.hass.language;
 
@@ -397,20 +483,19 @@ export class RsScheduleSettings extends RsScheduleBase {
 
     const isOn = entityState.state === "on";
     if (isOn) {
-      const attrs = entityState.attributes ?? {};
-      const blockTemp = attrs.temperature as number | undefined;
+      const { blockTemp, heatTemp, coolTemp } = this._readBlockTemps(index);
       if (blockTemp != null) {
         return localize("schedule.from_schedule", l, {
           temp: String(blockTemp),
           unit: tempUnit(this.hass),
         });
       }
-      const heatTemp = attrs.heat_temperature as number | undefined;
-      const coolTemp = attrs.cool_temperature as number | undefined;
       if (heatTemp != null || coolTemp != null) {
+        // heatTemp/coolTemp are entity attributes (already display units); the
+        // comfort fallbacks are backend Celsius and need converting.
         return localize("schedule.from_schedule_split", l, {
-          heat: String(heatTemp ?? this.comfortHeat),
-          cool: String(coolTemp ?? this.comfortCool),
+          heat: heatTemp != null ? String(heatTemp) : formatTemp(this.comfortHeat, this.hass),
+          cool: coolTemp != null ? String(coolTemp) : formatTemp(this.comfortCool, this.hass),
           unit: tempUnit(this.hass),
         });
       }
