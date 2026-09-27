@@ -33,8 +33,11 @@ async def async_setup_entry(
     store = hass.data[DOMAIN]["store"]
     coordinator.async_add_switch_entities = async_add_entities
 
-    # Global vacation switch (always created)
-    entities: list[SwitchEntity] = [RoomMindVacationSwitch(coordinator)]
+    # Global switches (always created)
+    entities: list[SwitchEntity] = [
+        RoomMindVacationSwitch(coordinator),
+        RoomMindBoilerHeatingSwitch(coordinator),
+    ]
 
     rooms = store.get_rooms()
     for area_id, room in rooms.items():
@@ -110,11 +113,13 @@ class RoomMindClimateControlSwitch(CoordinatorEntity, SwitchEntity):
 
 
 class RoomMindPreferElectricSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to prefer electric heat (AC) over the boiler for one room.
+    """Switch to prefer electric heat (AC or electric heater) over the boiler for one room.
 
     Intended for surplus-PV heating: while on, heat source orchestration picks the
-    AC regardless of outdoor temperature and never escalates to running the boiler
-    alongside it. Has no effect in rooms without both device types.
+    electric sources regardless of outdoor temperature and never escalates to
+    running the boiler alongside them. While the boiler heating switch is off, this
+    flag is the only thing that lets a room's electric sources run at all. Has no
+    effect in rooms without TRVs plus an AC or electric heater.
     """
 
     _attr_has_entity_name = True
@@ -181,4 +186,37 @@ class RoomMindVacationSwitch(CoordinatorEntity, SwitchEntity):
         """Deactivate vacation mode."""
         store = self.coordinator.hass.data[DOMAIN]["store"]
         await store.async_save_settings({"vacation_until": None})
+        await self.coordinator.async_request_refresh()
+
+
+class RoomMindBoilerHeatingSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to allow or forbid heating with the boiler globally.
+
+    Off hands heating to electric sources only: ACs and electric heaters run where
+    a room's prefer-electric switch is on, and boiler-fed TRVs only heat a room back
+    up to its eco temperature when it falls below it.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: RoomMindCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{DOMAIN}_boiler_heating"
+        self._attr_name = "Boiler Heating"
+        self._attr_icon = "mdi:water-boiler"
+        self.entity_id = f"switch.{DOMAIN}_boiler_heating"
+
+    @property
+    def is_on(self) -> bool:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        return bool(store.get_settings().get("boiler_heating_enabled", True))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        await store.async_save_settings({"boiler_heating_enabled": True})
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        await store.async_save_settings({"boiler_heating_enabled": False})
         await self.coordinator.async_request_refresh()

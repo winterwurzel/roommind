@@ -1494,23 +1494,26 @@ class MPCController:
                     continue
                 if cmd.active:
                     if cmd.device_type == "thermostat":
+                        # A fallback TRV (boiler disabled) heats to its own floor
+                        # target, not the room target.
+                        cmd_target = cmd.target_temp if cmd.target_temp is not None else effective_target
                         if self.has_external_sensor and current_temp is not None:
                             t = round(
                                 current_temp + cmd.power_fraction * (trv_heat_boost - current_temp),
                                 1,
                             )
-                            t = max(effective_target, t)
+                            t = max(cmd_target, t)
                             t = min(trv_heat_boost, t)
                         else:
-                            t = trv_heat_boost if self.has_external_sensor else effective_target
-                        t_final = effective_target if cmd.entity_id in self._direct_eids else t
+                            t = trv_heat_boost if self.has_external_sensor else cmd_target
+                        t_final = cmd_target if cmd.entity_id in self._direct_eids else t
                         ha_t = celsius_to_ha_temp(self.hass, t_final)
                         await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat"})
                         await self._call(
                             "set_temperature",
                             {"entity_id": cmd.entity_id, "temperature": ha_t, "hvac_mode": "heat"},
                             temp_intent="heat",
-                            deadband=self._proportional_deadband(cmd.entity_id, current_temp, effective_target),
+                            deadband=self._proportional_deadband(cmd.entity_id, current_temp, cmd_target),
                         )
                     else:  # ac
                         if self.has_external_sensor and current_temp is not None:

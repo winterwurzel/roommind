@@ -42,6 +42,10 @@ class DeviceCommand:
     active: bool
     power_fraction: float  # 0.0-1.0
     reason: str
+    # Per-device heat target overriding the room target. Set when the boiler is
+    # disabled and a TRV only runs as the cold-room fallback, so it heats to the
+    # floor temperature rather than to comfort.
+    target_temp: float | None = None
 
 
 @dataclass
@@ -84,14 +88,31 @@ def evaluate_heat_sources(
     outdoor_temp: float | None,
     previous_active_sources: str,
     hass: HomeAssistant,
+    boiler_enabled: bool = True,
+    boiler_floor_temp: float | None = None,
 ) -> HeatSourcePlan | None:
     """Evaluate which heating devices to activate.
+
+    With ``boiler_enabled`` False the decision is delegated to
+    evaluate_boiler_disabled; see there.
 
     Returns a HeatSourcePlan for MODE_HEATING, or None if orchestration
     should not apply (wrong mode, disabled, or missing data).
     """
     if mode != MODE_HEATING:
         return None
+
+    if not boiler_enabled:
+        return evaluate_boiler_disabled(
+            room_config=room_config,
+            power_fraction=power_fraction,
+            current_temp=current_temp,
+            target_temp=target_temp,
+            outdoor_temp=outdoor_temp,
+            previous_active_sources=previous_active_sources,
+            hass=hass,
+            floor_temp=boiler_floor_temp,
+        )
 
     if not room_config.get("heat_source_orchestration", False):
         return None
@@ -309,4 +330,159 @@ def evaluate_heat_sources(
         outdoor_temp,
     )
 
+    return HeatSourcePlan(commands=commands, active_sources=active, reason=reason)
+
+
+def _usable_electric_sources(
+    hass: HomeAssistant,
+    room_config: dict,
+    outdoor_temp: float | None,
+) -> list[tuple[str, str]]:
+    """ACs and electric heaters that can heat right now.
+
+    Same filters as the normal path: ACs drop out in extreme cold or without heat
+    support, electric heaters only when unavailable.
+    """
+    devices = room_config.get("devices", [])
+    ac_min_outdoor = room_config.get("heat_source_ac_min_outdoor", DEFAULT_HEAT_SOURCE_AC_MIN_OUTDOOR)
+    ac_disabled = outdoor_temp is not None and outdoor_temp < ac_min_outdoor
+    sources: list[tuple[str, str]] = []
+    if not ac_disabled:
+        sources += [(eid, "ac") for eid in get_ac_eids(devices) if _ac_can_heat(hass, eid)]
+    sources += [(eid, "electric") for eid in get_electric_eids(devices) if _is_available(hass, eid)]
+    return sources
+
+
+def _fallback_active(
+    current_temp: float,
+    floor_temp: float | None,
+    previous_active_sources: str,
+) -> bool:
+    """Whether the boiler may run as the cold-room fallback.
+
+    Starts below the floor and, once running, holds until the room is
+    HEAT_SOURCE_HYSTERESIS above it so the TRVs do not chatter at the threshold.
+    """
+    if floor_temp is None:
+        return False
+    if current_temp < floor_temp:
+        return True
+    was_running = previous_active_sources in ("primary", "both")
+    return was_running and current_temp < floor_temp + HEAT_SOURCE_HYSTERESIS
+
+
+def evaluate_boiler_disabled(
+    room_config: dict,
+    *,
+    power_fraction: float,
+    current_temp: float | None,
+    target_temp: float | None,
+    outdoor_temp: float | None,
+    previous_active_sources: str,
+    hass: HomeAssistant,
+    floor_temp: float | None,
+) -> HeatSourcePlan | None:
+    """Plan heating while the boiler is switched off globally.
+
+    Electric sources (ACs and resistive heaters) run only while the room's
+    prefer_electric_heat flag is on - that flag is what the surplus automations
+    drive, so without surplus they stay off. Boiler-fed TRVs run only as a
+    fallback when the room falls below ``floor_temp``, and then heat to the floor,
+    not to the room target. Unlike the normal path this also applies to rooms
+    without any electric source, so their TRVs are idled explicitly.
+
+    Returns None only for rooms without TRVs, which the boiler cannot affect.
+    """
+    devices = room_config.get("devices", [])
+    thermostats = get_trv_eids(devices)
+    if not thermostats:
+        return None
+
+    if current_temp is None or target_temp is None:
+        return _boiler_disabled_plan(
+            room_config,
+            thermostats,
+            electric_sources=[],
+            boiler_on=False,
+            electric_on=False,
+            power_fraction=0.0,
+            primary_target=None,
+            reason="no temperature data",
+        )
+
+    delta_t = target_temp - current_temp
+    electric_sources: list[tuple[str, str]] = []
+    if room_config.get("prefer_electric_heat", False):
+        electric_sources = _usable_electric_sources(hass, room_config, outdoor_temp)
+    electric_on = delta_t > 0 and bool(electric_sources)
+
+    primary_target = min(floor_temp, target_temp) if floor_temp is not None else None
+    boiler_on = delta_t > 0 and _fallback_active(current_temp, primary_target, previous_active_sources)
+
+    reason = f"boiler disabled ({delta_t:.1f}°C gap)"
+    if boiler_on:
+        reason += f"; below floor {primary_target}°C"
+    return _boiler_disabled_plan(
+        room_config,
+        thermostats,
+        electric_sources=electric_sources,
+        boiler_on=boiler_on,
+        electric_on=electric_on,
+        power_fraction=power_fraction,
+        primary_target=primary_target,
+        reason=reason,
+    )
+
+
+def _boiler_disabled_plan(
+    room_config: dict,
+    thermostats: list[str],
+    *,
+    electric_sources: list[tuple[str, str]],
+    boiler_on: bool,
+    electric_on: bool,
+    power_fraction: float,
+    primary_target: float | None,
+    reason: str,
+) -> HeatSourcePlan:
+    """Build commands for every heating device in the room."""
+    commands = [
+        DeviceCommand(
+            entity_id=eid,
+            role="primary",
+            device_type="thermostat",
+            active=boiler_on,
+            power_fraction=power_fraction if boiler_on else 0.0,
+            reason="below floor" if boiler_on else "boiler disabled",
+            target_temp=primary_target if boiler_on else None,
+        )
+        for eid in thermostats
+    ]
+    selected = {eid for eid, _ in electric_sources}
+    devices = room_config.get("devices", [])
+    secondaries = [(eid, "ac") for eid in get_ac_eids(devices)]
+    secondaries += [(eid, "electric") for eid in get_electric_eids(devices)]
+    for eid, device_type in secondaries:
+        is_active = electric_on and eid in selected
+        commands.append(
+            DeviceCommand(
+                entity_id=eid,
+                role="secondary",
+                device_type=device_type,
+                active=is_active,
+                power_fraction=power_fraction if is_active else 0.0,
+                reason="electric preferred" if is_active else "electric heat not preferred",
+            )
+        )
+
+    if boiler_on and electric_on:
+        active = "both"
+    elif boiler_on:
+        active = "primary"
+    elif electric_on:
+        active = "secondary"
+    else:
+        active = "none"
+
+    _LOGGER.debug("Room '%s': boiler disabled → %s (%s)", room_config.get("area_id", "?"), active, reason)
     return HeatSourcePlan(commands=commands, active_sources=active, reason=reason)

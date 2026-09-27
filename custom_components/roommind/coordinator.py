@@ -76,6 +76,7 @@ from .utils.device_utils import (
     get_ac_eids,
     get_all_entity_ids,
     get_direct_setpoint_eids,
+    get_electric_eids,
     get_trv_eids,
     room_contributes_to_group,
 )
@@ -800,14 +801,18 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             eid for eid in get_trv_eids(room.get("devices", [])) if self._valve_manager.is_entity_cycling(eid)
         }
 
-        # Heat source orchestration: smart routing for rooms with both TRVs and ACs
+        # Heat source orchestration: smart routing for rooms with TRVs plus an AC
+        # or electric heater. With the boiler switched off globally it covers
+        # every room with TRVs, so boiler-only rooms get their TRVs idled too.
         heat_source_plan = None
+        boiler_enabled = settings.get("boiler_heating_enabled", True)
+        room_devices = room.get("devices", [])
+        has_electric_source = bool(get_ac_eids(room_devices) or get_electric_eids(room_devices))
         if (
-            room.get("heat_source_orchestration", False)
-            and mode == MODE_HEATING
+            mode == MODE_HEATING
             and has_external_sensor
-            and get_trv_eids(room.get("devices", []))
-            and get_ac_eids(room.get("devices", []))
+            and get_trv_eids(room_devices)
+            and (not boiler_enabled or (room.get("heat_source_orchestration", False) and has_electric_source))
         ):
             heat_source_plan = evaluate_heat_sources(
                 room_config=room,
@@ -818,9 +823,17 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                 outdoor_temp=self.outdoor_temp_effective,
                 previous_active_sources=self._heat_source_states.get(area_id, "none"),
                 hass=self.hass,
+                boiler_enabled=boiler_enabled,
+                boiler_floor_temp=room.get("eco_heat", room.get("eco_temp", DEFAULT_ECO_HEAT)),
             )
             if heat_source_plan is not None:
                 self._heat_source_states[area_id] = heat_source_plan.active_sources
+                if not boiler_enabled and heat_source_plan.active_sources == "none":
+                    # Nothing may heat: report the room as idle so the display and
+                    # the thermal model match reality instead of "heating" at 0 %.
+                    mode = MODE_IDLE
+                    power_fraction = 0.0
+                    heat_source_plan = None
             else:
                 # Orchestrator returned None (e.g. missing current/target temp).
                 # The non-orchestrated async_apply path commands all devices,
