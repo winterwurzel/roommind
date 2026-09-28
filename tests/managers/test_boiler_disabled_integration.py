@@ -125,3 +125,37 @@ class TestElectricWithoutAc:
         assert _modes(hass, HEATER) == ["heat"]
         assert "heat" not in _modes(hass, TRV)
         assert coordinator._heat_source_states.get("living_room") == "secondary"
+
+
+HEATER_RUNNING = {HEATER: ("heat", {"hvac_modes": ["off", "heat"], "hvac_action": "heating"})}
+
+
+class TestElectricHeaterTurnedOffWhenIdle:
+    """Regression: electric heaters were only commanded through a heat source plan,
+    so when the room went idle (surplus over, target reached) nothing turned a
+    running heater off and it kept heating to the overshoot setpoint."""
+
+    @pytest.mark.asyncio
+    async def test_idle_room_turns_heater_off(self, coordinator, real_store, hass):
+        room = _room([_trv(), HEATER_DEVICE], prefer_electric_heat=False)
+        await _setup_store(real_store, room)
+        hass.states.get = MagicMock(
+            side_effect=_make_hass_states(temp="23.0", outdoor_temp="5.0", extra=HEATER_RUNNING)
+        )
+
+        await coordinator._async_update_data()
+
+        assert _modes(hass, HEATER) == ["off"]
+
+    @pytest.mark.asyncio
+    async def test_boiler_disabled_without_surplus_turns_heater_off(self, coordinator, real_store, hass):
+        room = _room([_trv(), HEATER_DEVICE], prefer_electric_heat=False)
+        await _setup_store(real_store, room, BOILER_OFF)
+        hass.states.get = MagicMock(
+            side_effect=_make_hass_states(temp="20.0", outdoor_temp="5.0", extra=HEATER_RUNNING)
+        )
+
+        await coordinator._async_update_data()
+
+        assert _modes(hass, HEATER) == ["off"]
+        assert "heat" not in _modes(hass, TRV)
