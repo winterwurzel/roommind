@@ -41,6 +41,7 @@ from ..utils.device_utils import (
     IDLE_ACTION_SETBACK,
     get_ac_eids,
     get_direct_setpoint_eids,
+    get_electric_eids,
     get_idle_action,
     get_trv_eids,
     has_reliable_hvac_modes,
@@ -1332,6 +1333,23 @@ class MPCController:
         # ACs were previously never filtered because exclude_eids only ever
         # carried TRVs (valve protection is TRV-only).  Coil dry excludes ACs.
         acs = [e for e in self.acs if e not in _exclude]
+
+        # Electric heaters are only ever driven by a heat source plan. Every other
+        # path (idle, cooling, unorchestrated heating) must idle them explicitly:
+        # they are in neither the TRV nor the AC list, so without this a heater
+        # started on surplus keeps its overshoot setpoint after the surplus ends.
+        if not (mode == MODE_HEATING and heat_source_plan is not None):
+            for eid in get_electric_eids(self._devices):
+                if eid in _exclude:
+                    continue
+                await async_idle_device(
+                    self.hass,
+                    eid,
+                    self._devices,
+                    area_id=self._area_id,
+                    targets=targets,
+                    force_off=force_off,
+                )
 
         # Managed mode (no external sensor) with auto climate mode and
         # both device types: activate each device in its natural mode so
