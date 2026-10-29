@@ -345,3 +345,54 @@ class TestEvaluateHeatSources:
 
         assert isinstance(result, HeatSourcePlan)
         assert result.active_sources == "primary"
+
+
+class TestAcSurplusOnly:
+    """heat_source_ac_surplus_only: the AC heats only while prefer_electric_heat is on."""
+
+    @staticmethod
+    def _room(prefer_electric: bool) -> dict:
+        room = _make_room(primary_delta=1.5, outdoor_threshold=5.0)
+        room["heat_source_ac_surplus_only"] = True
+        room["prefer_electric_heat"] = prefer_electric
+        return room
+
+    def test_mild_weather_without_surplus_uses_boiler_and_idles_ac(self):
+        hass = _make_hass(["heat", "cool"])
+        # delta_t = 2.0, outdoor 12 C: the weather rule alone would pick the AC
+        result = evaluate_heat_sources(self._room(False), MODE_HEATING, 0.7, 19.0, 21.0, 12.0, "none", hass)
+
+        assert result.active_sources == "primary"
+        trv_cmds = [c for c in result.commands if c.device_type == "thermostat"]
+        ac_cmds = [c for c in result.commands if c.device_type == "ac"]
+        assert trv_cmds[0].active
+        assert len(ac_cmds) == 1
+        assert not ac_cmds[0].active
+        assert ac_cmds[0].power_fraction == 0.0
+
+    def test_large_gap_without_surplus_does_not_add_ac(self):
+        hass = _make_hass(["heat", "cool"])
+        # delta_t = 4.0 would normally activate both sources
+        result = evaluate_heat_sources(self._room(False), MODE_HEATING, 0.8, 17.0, 21.0, 10.0, "none", hass)
+
+        assert result.active_sources == "primary"
+        ac_cmds = [c for c in result.commands if c.device_type == "ac"]
+        assert not ac_cmds[0].active
+
+    def test_surplus_selects_ac_even_in_cold_weather(self):
+        hass = _make_hass(["heat", "cool"])
+        result = evaluate_heat_sources(self._room(True), MODE_HEATING, 0.7, 19.0, 21.0, -5.0, "none", hass)
+
+        assert result.active_sources == "secondary"
+        ac_cmds = [c for c in result.commands if c.device_type == "ac"]
+        trv_cmds = [c for c in result.commands if c.device_type == "thermostat"]
+        assert ac_cmds[0].active
+        assert not trv_cmds[0].active
+
+    def test_flag_off_keeps_weather_selection(self):
+        hass = _make_hass(["heat", "cool"])
+        room = self._room(False)
+        room["heat_source_ac_surplus_only"] = False
+        result = evaluate_heat_sources(room, MODE_HEATING, 0.7, 19.0, 21.0, 12.0, "none", hass)
+
+        assert result.active_sources == "secondary"
