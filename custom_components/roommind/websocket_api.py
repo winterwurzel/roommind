@@ -130,6 +130,7 @@ _ROOM_SAVE_FIELDS = (
     "heat_source_primary_delta",
     "heat_source_outdoor_threshold",
     "heat_source_ac_min_outdoor",
+    "heat_source_ac_surplus_only",
     "valve_protection_exclude",
     "climate_control_enabled",
 )
@@ -417,6 +418,7 @@ async def websocket_list_rooms(
         vol.Optional("heat_source_primary_delta"): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=5.0)),
         vol.Optional("heat_source_outdoor_threshold"): vol.All(vol.Coerce(float), vol.Range(min=-20, max=25)),
         vol.Optional("heat_source_ac_min_outdoor"): vol.All(vol.Coerce(float), vol.Range(min=-30, max=5)),
+        vol.Optional("heat_source_ac_surplus_only"): bool,
         vol.Optional("climate_control_enabled"): bool,
     }
 )

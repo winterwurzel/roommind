@@ -140,27 +140,32 @@ def evaluate_heat_sources(
     # A heat pump can beat a boiler on running cost in mild weather, but resistive
     # heat never does - it is worth running only when the power is surplus that
     # would otherwise be exported, so it must not be picked on cost heuristics.
+    # heat_source_ac_surplus_only applies the same rule to the room's ACs: no weather
+    # or large-gap selection, the AC heats only while prefer_electric_heat is on.
     prefer_electric_flag = bool(room_config.get("prefer_electric_heat", False))
+    ac_selectable = prefer_electric_flag or not room_config.get("heat_source_ac_surplus_only", False)
     primary_devices: list[tuple[str, str]] = [(eid, "thermostat") for eid in thermostats]
-    secondary_devices: list[tuple[str, str]] = [(eid, "ac") for eid in acs]
+    ac_sources = [(eid, "ac") for eid in acs]
+    electric_sources = [(eid, "electric") for eid in electrics]
+    secondary_devices: list[tuple[str, str]] = list(ac_sources) if ac_selectable else []
     if prefer_electric_flag:
-        secondary_devices += [(eid, "electric") for eid in electrics]
+        secondary_devices += electric_sources
 
-    # Electric heaters kept out of the selectable group still need explicit idle
-    # commands, otherwise nothing turns them off once a surplus window ends.
-    unselected_electrics = [] if prefer_electric_flag else list(electrics)
+    # Sources kept out of the selectable group still need explicit idle commands,
+    # otherwise nothing turns them off once a surplus window ends.
+    unselected_electrics = ([] if ac_selectable else ac_sources) + ([] if prefer_electric_flag else electric_sources)
 
     def _idle_electric_cmds() -> list[DeviceCommand]:
         return [
             DeviceCommand(
                 entity_id=eid,
                 role="secondary",
-                device_type="electric",
+                device_type=device_type,
                 active=False,
                 power_fraction=0.0,
-                reason="electric heat not preferred",
+                reason="electric heat only on surplus",
             )
-            for eid in unselected_electrics
+            for eid, device_type in unselected_electrics
         ]
 
     # Early exit: at or above target, no heating needed
