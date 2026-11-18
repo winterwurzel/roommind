@@ -4,27 +4,36 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from homeassistant.components.frontend import (
+    add_extra_js_url,
     async_register_built_in_panel,
     async_remove_panel,
 )
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, PLATFORMS, VERSION
+from .control.direct_valve import async_release_all_valves, clear_valve_cache
 from .coordinator import RoomMindCoordinator
+from .deprecation import async_schedule_deprecation_check
 from .store import RoomMindStore
-from .websocket_api import async_register_websocket_commands
+from .utils.area_utils import rooms_with_area
+from .utils.device_utils import configured_valves
+from .websocket_api import async_pause_room, async_register_websocket_commands, async_resume_room
 
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+CARD_URL = "/roommind/roommind-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -44,21 +53,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await store.async_load()
         hass.data[DOMAIN]["store"] = store
 
+    clear_valve_cache()  # after an unload, which stopped valve control
     coordinator = RoomMindCoordinator(hass, entry)
+    # Before the first refresh: its commands are what later setpoint changes are judged against (#259)
+    entry.async_on_unload(coordinator.device_setpoints.async_track(hass))
     await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
     hass.data[DOMAIN]["coordinator"] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(async_track_area_changes(hass))
 
     # Clean up orphaned entities (e.g. cover entities for rooms without covers)
     coordinator.cleanup_orphaned_entities()
+    async_schedule_deprecation_check(hass)
 
     await _async_register_panel(hass)
+    await _async_register_card(hass)
     await _async_check_version_mismatch(hass)
 
     return True
+
+
+def async_track_area_changes(hass: HomeAssistant) -> Callable[[], None]:
+    """A room rests while its Home Assistant area is deleted and runs again once it is back (#494)."""
+
+    async def _async_area_updated(event: Event[ar.EventAreaRegistryUpdatedData]) -> None:
+        area_id = event.data["area_id"]
+        if hass.data[DOMAIN]["store"].get_room(area_id) is None:
+            return
+        if event.data["action"] == "remove":
+            _LOGGER.info("Area '%s' was deleted, its room rests until the area is back or it is deleted", area_id)
+            await async_pause_room(hass, area_id)
+        elif event.data["action"] == "create":
+            _LOGGER.info("Area '%s' is back, its room runs again", area_id)
+            await async_resume_room(hass, area_id)
+
+    unsub: Callable[[], None] = hass.bus.async_listen(ar.EVENT_AREA_REGISTRY_UPDATED, _async_area_updated)
+    return unsub
 
 
 async def _async_migrate_storage(hass: HomeAssistant) -> None:
@@ -115,6 +148,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a RoomMind config entry."""
     unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        await _async_release_all_valves(hass)
+    if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
         hass.data[DOMAIN].pop("coordinator", None)
 
@@ -123,6 +158,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_remove_panel(hass, "roommind")
 
     return unload_ok
+
+
+async def _async_release_all_valves(hass: HomeAssistant) -> None:
+    """Hand pinned valves back to their TRVs (#413): without RoomMind nobody would.
+
+    A reload pins them again on the next cycle.
+    """
+    store = hass.data.get(DOMAIN, {}).get("store")
+    await async_release_all_valves(
+        hass, configured_valves(rooms_with_area(hass, store.get_rooms())) if store is not None else {}
+    )
 
 
 async def _async_check_version_mismatch(hass: HomeAssistant) -> None:
@@ -153,8 +199,33 @@ async def _async_check_version_mismatch(hass: HomeAssistant) -> None:
         ir.async_delete_issue(hass, DOMAIN, "restart_required")
 
 
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Load the dashboard card on every frontend page, so it needs no manual resource (#346).
+
+    The version query makes browsers fetch the new card after an update.
+    """
+    if hass.data[DOMAIN].get("card_registered"):
+        return
+
+    card_js = Path(__file__).parent / "frontend" / "roommind-card.js"
+    if not card_js.exists():
+        _LOGGER.warning("RoomMind card JS not found at %s – dashboard card not available", card_js)
+        return
+
+    try:
+        await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(card_js), False)])
+    except RuntimeError:
+        _LOGGER.debug("RoomMind card static path already registered")
+
+    add_extra_js_url(hass, f"{CARD_URL}?v={VERSION}")
+    hass.data[DOMAIN]["card_registered"] = True
+
+
 async def _async_register_panel(hass: HomeAssistant) -> None:
-    """Register the RoomMind custom panel in the sidebar."""
+    """Register the RoomMind custom panel in the sidebar.
+
+    The version query makes browsers fetch the new panel after an update instead of a cached one.
+    """
     if hass.data[DOMAIN].get("panel_registered"):
         return
 
@@ -180,12 +251,13 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
             sidebar_title="RoomMind",
             sidebar_icon="mdi:home-thermometer",
             frontend_url_path="roommind",
+            require_admin=True,
             config={
                 "_panel_custom": {
                     "name": "roommind-panel",
                     "embed_iframe": False,
                     "trust_external": False,
-                    "js_url": "/roommind/roommind-panel.js",
+                    "js_url": f"/roommind/roommind-panel.js?v={VERSION}",
                 }
             },
         )

@@ -28,6 +28,7 @@ from ..const import (
     MODE_HEATING,
 )
 from ..utils.device_utils import get_ac_eids, get_electric_eids, get_trv_eids, has_reliable_hvac_modes
+from ..utils.price_utils import LEVEL_CHEAP, LEVEL_EXPENSIVE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ def evaluate_heat_sources(
     outdoor_temp: float | None,
     previous_active_sources: str,
     hass: HomeAssistant,
+    price_level: str | None = None,
     boiler_enabled: bool = True,
     boiler_floor_temp: float | None = None,
 ) -> HeatSourcePlan | None:
@@ -95,6 +97,14 @@ def evaluate_heat_sources(
 
     With ``boiler_enabled`` False the decision is delegated to
     evaluate_boiler_disabled; see there.
+
+    ``price_level`` (only for rooms with ``heat_source_price_aware``): expensive electricity
+    prefers the primary source instead of the outdoor rule. Cheap electricity prefers the AC;
+    where the outdoor rule picks the primary source (cold day) only for a gap below
+    ``primary_delta`` and not within a running primary run. Without an outdoor reading the
+    gap rule decides as at a normal price (it already hands the AC every smaller gap), so
+    cheap electricity never gives the AC less than a normal price. A large gap still runs
+    both and the AC minimum outdoor temperature still applies.
 
     Returns a HeatSourcePlan for MODE_HEATING, or None if orchestration
     should not apply (wrong mode, disabled, or missing data).
@@ -168,39 +178,6 @@ def evaluate_heat_sources(
             for eid, device_type in unselected_electrics
         ]
 
-    # Early exit: at or above target, no heating needed
-    if delta_t <= 0:
-        idle_cmds: list[DeviceCommand] = _idle_electric_cmds()
-        for eid, device_type in primary_devices:
-            idle_cmds.append(
-                DeviceCommand(
-                    entity_id=eid,
-                    role="primary",
-                    device_type=device_type,
-                    active=False,
-                    power_fraction=0.0,
-                    reason="not selected",
-                )
-            )
-        for eid, device_type in secondary_devices:
-            idle_cmds.append(
-                DeviceCommand(
-                    entity_id=eid,
-                    role="secondary",
-                    device_type=device_type,
-                    active=False,
-                    power_fraction=0.0,
-                    reason="not selected",
-                )
-            )
-        _LOGGER.debug(
-            "Room '%s': heat source orchestration → none (delta_t=%.1f, outdoor=%s)",
-            room_config.get("area_id", "?"),
-            delta_t,
-            outdoor_temp,
-        )
-        return HeatSourcePlan(commands=idle_cmds, active_sources="none", reason="delta_t <= 0")
-
     # Hardware protection: disable AC heating in extreme cold
     ac_disabled = outdoor_temp is not None and outdoor_temp < ac_min_outdoor
     if ac_disabled:
@@ -244,10 +221,30 @@ def evaluate_heat_sources(
             prefer_ac = outdoor_temp > outdoor_threshold
     else:
         prefer_ac = None
+    if price_level == LEVEL_EXPENSIVE:
+        prefer_ac = False
+    elif price_level == LEVEL_CHEAP and prefer_ac is not True:
+        # In the cold an AC run ends as soon as the air reaches the target while the walls
+        # stay cold, so a pre-heat handed to it fell short of the comfort block: the AC
+        # takes only the gaps it may close alone, and an AC run whose gap grows hands over.
+        # Only ever widens the AC side: a running primary run keeps the rule of a normal price.
+        if previous_active_sources != "primary" and delta_t < primary_delta + (
+            HEAT_SOURCE_HYSTERESIS if previous_active_sources == "secondary" else 0.0
+        ):
+            prefer_ac = True
 
-    # "both" when gap is large, or hysteresis holds "both" state
+    # At or above the target the controller heats only by its run rules: min-run
+    # continuation and holding power keep a run's single source (parking it switched the
+    # AC every cycle around the target), and a run starting there (UFH drift bypass on a
+    # predicted dip) gets the preferred source, whose rules the controller applied
+    # (MPCController._resolve_run_system); `none` showed heating while nothing ran.
     if prefer_electric:
         active = "secondary"
+    elif delta_t <= 0 and previous_active_sources in ("primary", "secondary"):
+        active = previous_active_sources
+    elif delta_t <= 0 and previous_active_sources != "both":
+        active = "secondary" if prefer_ac else "primary"
+    # "both" when gap is large, or hysteresis holds "both" state
     elif delta_t >= large_gap_threshold + HEAT_SOURCE_HYSTERESIS:
         active = "both"
     elif previous_active_sources == "both" and delta_t > primary_delta - HEAT_SOURCE_HYSTERESIS:
@@ -290,6 +287,8 @@ def evaluate_heat_sources(
             reason_parts.append(f"electric preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
         else:
             reason_parts.append(f"AC preferred ({delta_t:.1f}°C gap, outdoor {outdoor_str})")
+    if price_level in (LEVEL_CHEAP, LEVEL_EXPENSIVE) and active in ("primary", "secondary"):
+        reason_parts.append(f"electricity {price_level}")
 
     for eid, device_type in primary_devices:
         is_active = active in ("primary", "both")

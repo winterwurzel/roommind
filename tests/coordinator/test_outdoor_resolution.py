@@ -171,6 +171,8 @@ async def test_ekf_training_skipped_when_no_outdoor(hass, mock_config_entry):
 
     assert not process_mock.called
     assert clear_mock.called
+    # the model temperature goes stale without training: resync on resume (#478)
+    assert clear_mock.call_args.kwargs["resync"] is True
 
 
 @pytest.mark.asyncio

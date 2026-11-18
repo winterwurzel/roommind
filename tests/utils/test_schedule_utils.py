@@ -12,14 +12,19 @@ from zoneinfo import ZoneInfo
 import pytest
 from homeassistant.util import dt as dt_util
 
-from custom_components.roommind.const import TargetTemps
+from custom_components.roommind.const import SCHEDULE_UNREADABLE_HOLD_HOURS, TargetTemps
 from custom_components.roommind.utils.schedule_utils import (
+    band_in_force,
     find_active_block,
     get_active_schedule_entity,
     make_target_resolver,
+    mask_override_band,
+    override_hold_until,
+    override_preset_band,
     read_schedule_blocks,
     resolve_schedule_index,
     resolve_target_at_time,
+    set_band_sides,
 )
 
 # ---------------------------------------------------------------------------
@@ -1754,3 +1759,216 @@ class TestFindRejectedBlockTemps:
         from custom_components.roommind.utils.schedule_utils import find_rejected_block_temps
 
         assert find_rejected_block_temps({"monday": None}) == []
+
+
+class TestOverrideBands:
+    """Override presets are bands, not single points (#284)."""
+
+    ROOM = {
+        "comfort_heat": 21.5,
+        "comfort_cool": 24.0,
+        "eco_heat": 17.0,
+        "eco_cool": 27.5,
+    }
+
+    def test_eco_preset_keeps_both_sides(self):
+        assert override_preset_band(self.ROOM, "eco") == (17.0, 27.5)
+
+    def test_boost_preset_is_comfort_band(self):
+        assert override_preset_band(self.ROOM, "boost") == (21.5, 24.0)
+
+    def test_legacy_single_temps_fall_back(self):
+        room = {"eco_temp": 16.0, "comfort_temp": 22.0}
+        assert override_preset_band(room, "eco") == (16.0, 27.0)
+        assert override_preset_band(room, "boost") == (22.0, 24.0)
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [("auto", (17.0, 27.5)), ("heat_only", (17.0, None)), ("cool_only", (None, 27.5))],
+    )
+    def test_mask_drops_unusable_side(self, mode, expected):
+        assert mask_override_band(17.0, 27.5, mode) == expected
+
+    def test_resolver_keeps_eco_override_band_over_horizon(self):
+        """The MPC forecast sees the same band the live path uses."""
+        room = {**self.ROOM, "override_heat": 17.0, "override_cool": 27.5, "override_until": None}
+        resolver = make_target_resolver(None, room, {})
+        for offset in (0, 1800, 7200):
+            t = resolver(time.time() + offset)
+            assert (t.heat, t.cool) == (17.0, 27.5)
+
+
+# ---------------------------------------------------------------------------
+# Occupancy eco: an empty room caps the schedule at eco (#180)
+# ---------------------------------------------------------------------------
+
+
+def _monday(hour: int) -> float:
+    # Evaluated per test: the TZ sweep switches the default zone after import.
+    return datetime(2025, 1, 6, hour, 0, 0, tzinfo=dt_util.DEFAULT_TIME_ZONE).timestamp()
+
+
+class TestRoomVacantCapsAtEco:
+    def _resolve(self, ts, blocks, **kwargs):
+        from custom_components.roommind.utils.schedule_utils import resolve_targets_at_time
+
+        args = {
+            "override_until": None,
+            "override_heat": None,
+            "override_cool": None,
+            "vacation_until": None,
+            "vacation_temp": None,
+            "comfort_heat": 21.0,
+            "comfort_cool": 24.0,
+            "eco_heat": 17.0,
+            "eco_cool": 27.0,
+        }
+        args.update(kwargs)
+        return resolve_targets_at_time(ts, blocks, **args)
+
+    def test_comfort_block_falls_to_eco(self):
+        blocks = {"monday": [{"from": "08:00:00", "to": "12:00:00", "data": {}}]}
+        assert self._resolve(_monday(10), blocks, room_vacant=True) == TargetTemps(17.0, 27.0)
+
+    def test_without_schedule_comfort_falls_to_eco(self):
+        assert self._resolve(_monday(10), None, room_vacant=True) == TargetTemps(17.0, 27.0)
+
+    def test_block_below_eco_is_not_raised(self):
+        blocks = {"monday": [{"from": "08:00:00", "to": "12:00:00", "data": {"temperature": 16.0}}]}
+        assert self._resolve(_monday(10), blocks, room_vacant=True) == TargetTemps(16.0, 27.0)
+
+    def test_schedule_off_stays_off(self):
+        blocks = {"monday": [{"from": "08:00:00", "to": "12:00:00", "data": {}}]}
+        result = self._resolve(_monday(6), blocks, room_vacant=True, schedule_off_action="off")
+        assert result == TargetTemps(None, None)
+
+    def test_override_wins(self):
+        result = self._resolve(
+            _monday(10),
+            None,
+            room_vacant=True,
+            override_heat=23.0,
+            override_cool=25.0,
+            override_until=_monday(10) + 3600,
+        )
+        assert result == TargetTemps(23.0, 25.0)
+
+    def test_occupied_room_follows_schedule(self):
+        assert self._resolve(_monday(10), None) == TargetTemps(21.0, 24.0)
+
+
+class TestCapToEco:
+    def test_caps_heat_down_and_cool_up(self):
+        from custom_components.roommind.utils.schedule_utils import cap_to_eco
+
+        assert cap_to_eco(TargetTemps(21.0, 24.0), 17.0, 27.0) == TargetTemps(17.0, 27.0)
+
+    def test_keeps_lower_demand_and_missing_sides(self):
+        from custom_components.roommind.utils.schedule_utils import cap_to_eco
+
+        assert cap_to_eco(TargetTemps(15.0, 28.0), 17.0, 27.0) == TargetTemps(15.0, 28.0)
+        assert cap_to_eco(TargetTemps(None, 24.0), 17.0, 27.0) == TargetTemps(None, 27.0)
+        assert cap_to_eco(TargetTemps(21.0, None), 17.0, 27.0) == TargetTemps(17.0, None)
+
+
+def test_make_target_resolver_caps_an_empty_room_over_the_horizon():
+    """The MPC horizon must not pre-heat an empty room towards a later comfort block (#180)."""
+    from custom_components.roommind.utils.schedule_utils import make_target_resolver
+
+    room = {"comfort_heat": 21.0, "comfort_cool": 24.0, "eco_heat": 17.0, "eco_cool": 27.0}
+    resolver = make_target_resolver(None, room, {}, room_vacant=True)
+    assert resolver(time.time() + 3600) == TargetTemps(17.0, 27.0)
+    assert make_target_resolver(None, room, {})(time.time()) == TargetTemps(21.0, 24.0)
+
+
+# ---------------------------------------------------------------------------
+# band_in_force / set_band_sides (#259)
+# ---------------------------------------------------------------------------
+
+
+def test_band_in_force_prefers_the_active_override():
+    room = {"override_heat": 23.0, "override_cool": 25.0, "override_until": None}
+    assert band_in_force(room, {"heat_target": 21.0, "cool_target": 24.0}) == (23.0, 25.0)
+
+
+def test_band_in_force_takes_live_targets_without_mold_delta():
+    live = {"heat_target": 22.0, "cool_target": 24.0, "mold_prevention_active": True, "mold_prevention_delta": 1.0}
+    assert band_in_force({}, live) == (21.0, 24.0)
+
+
+def test_band_in_force_falls_back_to_comfort():
+    assert band_in_force({"comfort_heat": 20.5, "comfort_cool": 25.0}, {}) == (20.5, 25.0)
+
+
+def test_set_band_sides_sets_heat_and_pushes_cool_along():
+    assert set_band_sides((21.0, 24.0), 23.0, None, "auto") == (23.0, 24.0)
+    assert set_band_sides((21.0, 24.0), 25.0, None, "auto") == (25.0, 25.0)
+
+
+def test_set_band_sides_sets_cool_and_pushes_heat_along():
+    assert set_band_sides((21.0, 24.0), None, 20.0, "auto") == (20.0, 20.0)
+
+
+def test_set_band_sides_sets_both_and_stays_within_bounds():
+    assert set_band_sides((21.0, 24.0), 22.0, 25.04, "auto") == (22.0, 25.0)
+    assert set_band_sides((21.0, None), 2.0, None, "heat_only") == (5.0, None)
+    assert set_band_sides((21.0, 24.0), 40.0, None, "auto") == (35.0, 35.0)
+
+
+def test_set_band_sides_ignores_the_unused_side():
+    assert set_band_sides((21.0, 24.0), 22.0, 26.0, "cool_only") == (None, 26.0)
+    assert set_band_sides((21.0, 24.0), 21.5, None, "heat_only") == (21.5, None)
+    assert set_band_sides((None, 24.0), 22.0, None, "cool_only") is None
+    assert set_band_sides((21.0, None), None, 22.0, "heat_only") is None
+
+
+# ---------------------------------------------------------------------------
+# override_hold_until
+# ---------------------------------------------------------------------------
+
+_HOLD_ROOM = {"schedules": [{"entity_id": "schedule.living"}]}
+
+
+def _hold_hass(state: str | None, next_event=None):
+    hass = MagicMock()
+    if state is None:
+        hass.states.get.return_value = None
+    else:
+        hass.states.get.return_value = MagicMock(state=state, attributes={"next_event": next_event})
+    return hass
+
+
+def test_hold_ends_at_the_next_schedule_change():
+    nxt = datetime.fromtimestamp(time.time() + 1800, UTC)
+    assert override_hold_until(_hold_hass("on", nxt), _HOLD_ROOM) == nxt.timestamp()
+
+
+def test_hold_reads_an_iso_next_event():
+    nxt = datetime.fromtimestamp(time.time() + 1800, UTC)
+    assert override_hold_until(_hold_hass("on", nxt.isoformat()), _HOLD_ROOM) == nxt.timestamp()
+
+
+def test_hold_without_schedule_has_no_end():
+    assert override_hold_until(_hold_hass(None), {"schedules": []}) is None
+
+
+def test_hold_under_a_schedule_without_blocks_has_no_end():
+    """An empty helper never changes, so there is nothing to wait for."""
+    assert override_hold_until(_hold_hass("off", None), _HOLD_ROOM) is None
+
+
+@pytest.mark.parametrize(
+    "hass",
+    [
+        _hold_hass(None),
+        _hold_hass("unavailable"),
+        _hold_hass("unknown"),
+        _hold_hass("on", datetime.fromtimestamp(time.time() - 60, UTC)),
+    ],
+    ids=["missing", "unavailable", "unknown", "stale"],
+)
+def test_hold_under_an_unreadable_schedule_ends_after_the_fallback(hass):
+    """Without a readable next change the hold must not run forever."""
+    now = time.time()
+    until = override_hold_until(hass, _HOLD_ROOM, now=now)
+    assert until == now + SCHEDULE_UNREADABLE_HOLD_HOURS * 3600

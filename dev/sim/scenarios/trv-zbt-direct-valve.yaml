@@ -1,0 +1,65 @@
+name: trv-zbt-direct-valve
+description: >
+  The living room of trv-direct-valve with a SONOFF TRV-ZBT (gen2) under direct valve control
+  and no boiler master: the radiator gets 55 °C water all day, as from a central boiler
+  that does not know about RoomMind. The TRV-ZBT reads its second valve number (idle_valve_position) as the
+  opening while idle, not as a closing degree. Handled as a closing degree, every hand-back
+  set it to 100 and the valve stayed open whenever the room did not heat (#482). With
+  valve_closing_mode idle_opening RoomMind holds both at X and hands back 100/0.
+refs: [482, 413]
+tags: [trv, mpc, direct-valve]
+start: 2026-03-16T00:00
+duration: 3d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor:
+    sensors:
+      temperature: sensor.aussen_temp
+      humidity: sensor.aussen_feuchte
+  rooms:
+    wohnzimmer:
+      name: Wohnzimmer
+      floor_area_m2: 28
+      exterior_wall_m2: 16
+      initial: {temperature: 20.0}
+      windows: [{orientation: S, area_m2: 3.5}]
+      devices:
+        - {entity_id: climate.wz_trv, profile: sonoff_trv_zbt, valve_flow_exponent: 0.6, heating_curve: false}
+      sensors:
+        temperature: {entity_id: sensor.wohnzimmer_temp, profile: sonoff_snzb02d}
+helpers:
+  schedule:
+    plan_wohnen: {weekdays: ["06:00-08:00", "16:30-22:30"], weekend: ["07:30-23:00"]}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    outdoor_humidity_sensor: sensor.aussen_feuchte
+    weather_entity: weather.simhome
+    control_mode: mpc
+  rooms:
+    wohnzimmer:
+      devices:
+        - entity_id: climate.wz_trv
+          type: trv
+          heating_system_type: radiator
+          valve_opening_entity: number.wz_trv_heating_valve_position
+          valve_closing_entity: number.wz_trv_idle_valve_position
+          valve_closing_mode: idle_opening
+      temperature_sensor: sensor.wohnzimmer_temp
+      climate_mode: heat_only
+      schedules: [{entity_id: schedule.plan_wohnen}]
+      comfort_temp: 21.0
+      eco_temp: 18.0
+expect:
+  - {invariant: no_rejected_commands}
+  # 2026-10-29, 3 d: v1.8.0 (no closing mode) left the idle position at 100 after the start
+  # check, the TRV in "off" kept the valve open: 34.8 °C max, in band 18.2 %. With
+  # idle_opening: 23.7 °C max (March sun, heat only), in band 97.3 %, the same run as the
+  # TRVZB with closing degree in this room (78 commands, 12 starts).
+  - {metric: comfort.in_band_pct, room: wohnzimmer, min: 90}
+  - {metric: room.temp_max, room: wohnzimmer, max: 25}
+  - {metric: device.valve_commands_per_hour, entity_id: climate.wz_trv, max: 3}
+  # Eco at night, room above 18 °C: the TRV idles and the valve must be closed
+  - {check: "dev('climate.wz_trv').valve < 0.05", at: "+1d01h", label: valve closed while the room idles}

@@ -1,0 +1,14 @@
+name: covers-winter-sun
+extends: covers-heating-season
+description: >
+  The heating-season room in mid-January with clear skies and the default outdoor gate
+  (covers_outdoor_min_temp 10 °C): the low winter sun is pure gain, the blind stays up.
+tags: [covers, solar, ac]
+start: 2026-01-12T00:00
+duration: 5d
+roommind:
+  rooms:
+    wohnzimmer:
+      covers_outdoor_min_temp: 10
+expect+:
+  - {metric: cover.commands, entity_id: cover.wohnzimmer_raffstore, max: 0, label: no shading in winter}

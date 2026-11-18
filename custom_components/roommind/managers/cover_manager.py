@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from homeassistant.core import HomeAssistant
 
@@ -14,6 +14,9 @@ from ..const import (
     COVER_MIN_HOLD_SECONDS,
     COVER_POS_DEADBAND,
     COVER_POS_SCALE,
+    COVER_REOPEN_HOLD_SECONDS,
+    COVER_REOPEN_SNAP_PCT,
+    COVER_REOPEN_STEP,
     COVER_SOLAR_MIN,
     COVER_TRANSITION_SETTLE_S,
     COVER_USER_CONFLICT_THRESHOLD,
@@ -65,6 +68,7 @@ class _RoomCoverState:
     travel_from: int | None = None  # real reading at command time (travel corridor anchor)
     last_reading: int | None = None  # last real reading; never overwritten by commands
     drift_latched: bool = False  # current drift episode already armed an override once
+    seen_unforced: bool = False  # evaluated outside a forced position since the start
 
 
 class CoverManager:
@@ -160,12 +164,15 @@ class CoverManager:
         covers_deploy_threshold: float,
         covers_min_position: int,
         covers_snap_deploy: bool = False,
+        shade_by_need: bool = False,
         predicted_peak_temp: float | None,
         target_temp: float,
         q_solar: float,
         has_active_override: bool,
         forced_position: int | None = None,
+        forced_expected: int | None = None,
         forced_reason: str = "",
+        forced_unknown: bool = False,
         current_temp: float | None = None,
         solar_gated: bool = True,
     ) -> CoverDecision:
@@ -181,6 +188,10 @@ class CoverManager:
         if not cover_entity_ids:
             return CoverDecision(target_position=current, changed=False, reason="disabled")
 
+        # Only a cycle whose force sources were readable proves the start was outside a forced section
+        if forced_position is None and not forced_unknown:
+            state.seen_unforced = True
+
         # Gate 1: Forced position (schedule or night close) — immediate, no rate limit.
         # Note: the orchestrator returns early when covers_auto_enabled=False, so this gate
         # is only reached when auto control is on (or when evaluate() is called directly).
@@ -190,7 +201,16 @@ class CoverManager:
                 return CoverDecision(target_position=current, changed=False, reason="user_override_active")
             state.last_was_forced = True
             state.baseline_position = None
-            if abs(forced_position - current) <= 2:
+            # A cover's own minimum keeps it short of the raw target; compared against that, not every cycle anew
+            reached = forced_expected if forced_expected is not None else forced_position
+            if abs(reached - current) <= 2:
+                if state.last_commanded_position is None and not state.seen_unforced:
+                    # Found in place right after a start inside the forced section (reload/restart at
+                    # night): RoomMind's, so its end opens it again and a hand move is noticed (#499).
+                    # Otherwise the position stays whoever's it was (closed by hand stays closed).
+                    state.owned = True
+                    state.last_commanded_position = current
+                    state.travel_from = None
                 return CoverDecision(
                     target_position=current, changed=False, reason=f"forced_at_target({forced_reason})"
                 )
@@ -214,6 +234,15 @@ class CoverManager:
 
         # Gate 3: Manual override — never fight the user
         if has_active_override:
+            if state.last_was_forced and state.owned:
+                # A climate override is no reason to keep the night/schedule position (#499),
+                # but a predicted solar peak holds it as it would without the override (Gate 4)
+                if predicted_peak_temp is not None and self._solar_threat(
+                    predicted_peak_temp, target_temp, covers_deploy_threshold, current_temp
+                ):
+                    return CoverDecision(target_position=current, changed=False, reason="low_solar_but_peak_predicted")
+                state.last_was_forced = False
+                return self._retract_decision(state, "manual_override_active", "forced_end_retract", hold_time_ok=True)
             return CoverDecision(target_position=current, changed=False, reason="manual_override_active")
 
         # Gate 3b: User manually moved cover (e.g. opened for balcony)
@@ -230,10 +259,7 @@ class CoverManager:
 
         # Gate 4: Low solar — only retract if prediction also says no solar threat ahead
         if q_solar < COVER_SOLAR_MIN:
-            solar_threat = predicted_peak_temp > target_temp + covers_deploy_threshold and (
-                current_temp is None or predicted_peak_temp > current_temp
-            )
-            if solar_threat:
+            if self._solar_threat(predicted_peak_temp, target_temp, covers_deploy_threshold, current_temp):
                 return CoverDecision(target_position=current, changed=False, reason="low_solar_but_peak_predicted")
             return self._retract_decision(
                 state,
@@ -256,6 +282,12 @@ class CoverManager:
 
         if covers_snap_deploy:
             desired_pos = covers_min_position
+        elif shade_by_need:
+            # Close just far enough that the solar overshoot left over is the
+            # threshold: shading factor threshold/excess, cover effectiveness
+            # COVER_MAX_EFFECTIVENESS. The unit cools what is left, the room keeps daylight.
+            needed = (1.0 - covers_deploy_threshold / excess) / COVER_MAX_EFFECTIVENESS
+            desired_pos = max(covers_min_position, 100 - int(min(1.0, needed) * 100))
         else:
             raw_close_pct = min(100, int((excess - covers_deploy_threshold) * COVER_POS_SCALE))
             desired_pos = max(covers_min_position, 100 - raw_close_pct)
@@ -267,6 +299,22 @@ class CoverManager:
         if not hold_time_ok:
             return CoverDecision(target_position=current, changed=False, reason="min_hold_time")
 
+        # Reopening inside an episode follows the slowly falling afternoon excess;
+        # in 20 % steps that was a move every 15 min. An excess just above the
+        # threshold maps to fully open and counts as reopening too, otherwise the
+        # cover would retract at the threshold instead of below the hysteresis
+        # band. The retract below the band (deadband path above) is not affected.
+        reopen_ceiling = state.baseline_position if state.baseline_position is not None else 100
+        # Stopping a few % short of open shades next to nothing; the episode's end would move the rest
+        if current < desired_pos < reopen_ceiling and reopen_ceiling - desired_pos <= COVER_REOPEN_SNAP_PCT:
+            desired_pos = reopen_ceiling
+        if (
+            not was_forced
+            and current < desired_pos <= reopen_ceiling
+            and (desired_pos - current < COVER_REOPEN_STEP or now - state.last_change_ts < COVER_REOPEN_HOLD_SECONDS)
+        ):
+            return CoverDecision(target_position=current, changed=False, reason="reopen_hold")
+
         if abs(desired_pos - current) <= COVER_POS_DEADBAND:
             return CoverDecision(target_position=current, changed=False, reason="deadband")
 
@@ -274,6 +322,20 @@ class CoverManager:
             state.baseline_position = current
         reason = f"deploy(excess={excess:.2f}°C→pos={desired_pos}%)" if desired_pos < 100 else "retract"
         return self._apply_change(state, desired_pos, reason)
+
+    def snapshot(self, area_id: str) -> _RoomCoverState:
+        """Return a copy of the room's state, to undo an evaluate() whose move is not sent."""
+        return replace(self._get_state(area_id))
+
+    def hold(self, area_id: str, snapshot: _RoomCoverState, reason: str) -> CoverDecision:
+        """Undo the last evaluate() and keep the covers where they are.
+
+        The next cycle decides afresh, so a held forced position (night close,
+        schedule) goes out as soon as the hold ends.
+        """
+        snapshot.seen_unforced = snapshot.seen_unforced or self._get_state(area_id).seen_unforced
+        self._states[area_id] = snapshot
+        return CoverDecision(target_position=snapshot.current_position, changed=False, reason=reason)
 
     def remove_room(self, area_id: str) -> None:
         """Clean up state when a room is deleted."""
@@ -353,6 +415,14 @@ class CoverManager:
             self._states[area_id] = _RoomCoverState()
         return self._states[area_id]
 
+    @staticmethod
+    def _solar_threat(
+        predicted_peak_temp: float, target_temp: float, deploy_threshold: float, current_temp: float | None
+    ) -> bool:
+        return predicted_peak_temp > target_temp + deploy_threshold and (
+            current_temp is None or predicted_peak_temp > current_temp
+        )
+
     def _apply_change(self, state: _RoomCoverState, position: int, reason: str) -> CoverDecision:
         state.travel_from = state.current_position
         state.current_position = position
@@ -373,7 +443,10 @@ class CoverManager:
     ) -> CoverDecision:
         current = state.current_position
         target = state.baseline_position if state.baseline_position is not None else 100
-        if current >= target or abs(target - current) <= COVER_POS_DEADBAND:
+        # The deadband must not end an episode on RoomMind's own intermediate
+        # position: it would be handed to the user and kept overnight.
+        restore_pending = state.owned and state.last_commanded_position != target
+        if current >= target or (abs(target - current) <= COVER_POS_DEADBAND and not restore_pending):
             if state.baseline_position is not None:
                 # Episode ends at/near the user baseline without a command —
                 # hand the position back like the command-restore path below.

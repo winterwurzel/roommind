@@ -188,6 +188,109 @@ async def test_async_idle_device_fan_mode_not_in_fan_modes():
     assert len(fan_calls) == 0
 
 
+def _fan_only_ac(hass, state_name, fan_modes, fan_mode=None, idle_fan_mode="low"):
+    state = MagicMock()
+    state.state = state_name
+    state.attributes = {"hvac_modes": ["cool", "fan_only", "off"], "fan_modes": fan_modes, "fan_mode": fan_mode}
+    hass.states.get = MagicMock(return_value=state)
+    return [
+        {
+            "entity_id": "climate.ac1",
+            "type": "ac",
+            "role": "auto",
+            "idle_action": "fan_only",
+            "idle_fan_mode": idle_fan_mode,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fan_only_uses_the_devices_spelling_of_the_fan_mode():
+    """The default 'low' reaches a device that calls it 'Low' (and 'Medium Low' one that says 'medium_low')."""
+    _last_commands.clear()
+    hass = build_hass()
+    devices = _fan_only_ac(hass, "cool", ["Auto", "Low", "Medium Low", "High"], idle_fan_mode="low")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    fan_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_fan_mode"]
+    assert [c[0][2]["fan_mode"] for c in fan_calls] == ["Low"]
+
+    hass = build_hass()
+    devices = _fan_only_ac(hass, "cool", ["Auto", "Low", "Medium Low"], idle_fan_mode="medium_low")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    fan_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_fan_mode"]
+    assert [c[0][2]["fan_mode"] for c in fan_calls] == ["Medium Low"]
+
+
+@pytest.mark.asyncio
+async def test_fan_only_in_place_under_another_spelling_sends_nothing():
+    """Already in fan_only on 'Low': a configured 'low' is the same speed, so nothing is resent."""
+    _last_commands.clear()
+    hass = build_hass()
+    devices = _fan_only_ac(hass, "fan_only", ["Auto", "Low", "High"], fan_mode="Low")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fan_only_with_an_unsupported_fan_mode_is_not_resent_every_cycle():
+    """A fan mode the device lacks keeps its speed: fan_only once, not again each cycle."""
+    _last_commands.clear()
+    hass = build_hass()
+    devices = _fan_only_ac(hass, "fan_only", ["Silence", "1", "2", "3"], fan_mode="2")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state_name", ["unknown", "unavailable"])
+async def test_fan_only_without_state_feedback_sends_mode_and_speed_once(state_name):
+    """An IR unit without state gets fan_only and its speed once, not both again every cycle."""
+    clear_command_cache()
+    hass = build_hass()
+    devices = _fan_only_ac(hass, state_name, ["Auto", "Low", "High"], fan_mode="Auto")
+    for _ in range(5):
+        await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    sent = [(c[0][1], c[0][2]) for c in hass.services.async_call.call_args_list]
+    assert sent == [
+        ("set_hvac_mode", {"entity_id": "climate.ac1", "hvac_mode": "fan_only"}),
+        ("set_fan_mode", {"entity_id": "climate.ac1", "fan_mode": "Low"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fan_only_without_state_feedback_sends_a_changed_speed():
+    """The cached speed only suppresses the same speed: a new idle_fan_mode is sent."""
+    clear_command_cache()
+    hass = build_hass()
+    devices = _fan_only_ac(hass, "unknown", ["Auto", "Low", "High"], idle_fan_mode="low")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    devices[0]["idle_fan_mode"] = "high"
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    fan_calls = [c[0][2]["fan_mode"] for c in hass.services.async_call.call_args_list if c[0][1] == "set_fan_mode"]
+    assert fan_calls == ["Low", "High"]
+
+
+@pytest.mark.asyncio
+async def test_failed_fan_mode_send_is_retried_without_state_feedback():
+    """A speed that did not go out is not cached, so the next cycle tries again."""
+    clear_command_cache()
+    hass = build_hass()
+    devices = _fan_only_ac(hass, "unknown", ["Auto", "Low", "High"])
+
+    async def flaky(domain, service, data, **kwargs):
+        if service == "set_fan_mode" and not flaky.failed:
+            flaky.failed = True
+            raise RuntimeError("IR blaster busy")
+
+    flaky.failed = False
+    hass.services.async_call.side_effect = flaky
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    fan_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_fan_mode"]
+    assert len(fan_calls) == 2
+
+
 # ---------------------------------------------------------------------------
 # async_apply integration tests with fan_only idle_action
 # ---------------------------------------------------------------------------
@@ -242,7 +345,7 @@ async def test_mpc_apply_idle_respects_fan_only():
 
 @pytest.mark.asyncio
 async def test_mpc_apply_idle_forced_on_overrides_fan_only():
-    """Device in compressor_forced_on during IDLE runs forced_on logic, NOT fan_only."""
+    """Device in compressor_forced_on during IDLE is left running, NOT switched to fan_only."""
     _last_commands.clear()
     hass = build_hass()
     state = MagicMock()
@@ -277,12 +380,9 @@ async def test_mpc_apply_idle_forced_on_overrides_fan_only():
     await ctrl.async_apply("idle", 23.0, compressor_forced_on={"climate.ac1"})
 
     calls = hass.services.async_call.call_args_list
-    # forced_on sets temperature, does NOT switch to fan_only
     fan_only_calls = [c for c in calls if c[0][1] == "set_hvac_mode" and c[0][2].get("hvac_mode") == "fan_only"]
     assert len(fan_only_calls) == 0
-    # Verify forced_on DID call set_temperature (positive assertion)
-    temp_calls = [c for c in calls if c[0][1] == "set_temperature"]
-    assert len(temp_calls) >= 1
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -844,7 +944,7 @@ async def test_async_idle_device_setback_no_state():
 
 @pytest.mark.asyncio
 async def test_async_idle_device_setback_auto_mode_fallback():
-    """Setback with device in 'auto' hvac mode falls back to off + defense-in-depth set_temperature."""
+    """Setback with a cooling-capable device in 'auto' falls back to off, without the min_temp frame (#388)."""
     clear_command_cache()
     hass = build_hass()
     state = MagicMock()
@@ -863,8 +963,7 @@ async def test_async_idle_device_setback_auto_mode_fallback():
     targets = TargetTemps(heat=21.0, cool=24.0)
     await async_idle_device(hass, "climate.ac1", devices, area_id="living_room", targets=targets)
 
-    assert hass.services.async_call.call_count == 2
-    hass.services.async_call.assert_any_call(
+    hass.services.async_call.assert_called_once_with(
         "climate",
         "set_hvac_mode",
         {"entity_id": "climate.ac1", "hvac_mode": "off"},
@@ -1050,7 +1149,7 @@ async def test_mpc_apply_idle_respects_setback():
 
 @pytest.mark.asyncio
 async def test_mpc_apply_idle_forced_on_overrides_setback():
-    """Device in compressor_forced_on during IDLE runs forced_on logic, NOT setback."""
+    """Device in compressor_forced_on during IDLE keeps its setpoint, NOT the setback offset."""
     clear_command_cache()
     hass = build_hass()
     state = MagicMock()
@@ -1087,12 +1186,7 @@ async def test_mpc_apply_idle_forced_on_overrides_setback():
     await ctrl.async_apply(MODE_IDLE, targets, compressor_forced_on={"climate.ac1"})
 
     calls = hass.services.async_call.call_args_list
-    # forced_on sets temperature to actual target, not setback offset
-    temp_calls = [c for c in calls if c[0][1] == "set_temperature"]
-    assert len(temp_calls) >= 1
-    # Setback would be 26.0 (24+2), forced_on should use actual target (24.0)
-    setback_calls = [c for c in temp_calls if c[0][2].get("temperature") == 26.0]
-    assert len(setback_calls) == 0
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -1362,3 +1456,47 @@ async def test_mpc_apply_idle_force_off_keeps_low_exempt():
     temp_calls = [c for c in calls if c[0][1] == "set_temperature"]
     assert len(temp_calls) == 1
     assert temp_calls[0][0][2]["temperature"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_speed_from_an_earlier_fan_only_period_does_not_count():
+    """Back in fan_only after cooling: a speed that failed to go out now is retried, not taken from before."""
+    from custom_components.roommind.control.mpc_controller import _remember_command
+
+    clear_command_cache()
+    hass = build_hass()
+    devices = _fan_only_ac(hass, "unknown", ["Auto", "Low", "High"])
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    _remember_command("climate.ac1", "set_hvac_mode", {"hvac_mode": "cool"})
+
+    async def fan_fails(domain, service, data, **kwargs):
+        if service == "set_fan_mode":
+            raise RuntimeError("IR blaster busy")
+
+    hass.services.async_call.reset_mock()
+    hass.services.async_call.side_effect = fan_fails
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    await async_idle_device(hass, "climate.ac1", devices, area_id="living_room")
+    fan_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_fan_mode"]
+    assert len(fan_calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("fan_modes", "desired", "expected"),
+    [
+        (["Low", "low"], "low", "low"),
+        (["High+", "High"], "high", "High"),
+        (["High+", "High"], "high+", "High+"),
+        (["Auto", "Medium Low"], "medium_low", "Medium Low"),
+        ([1, 2, 3], "2", 2),
+        (None, "low", None),
+        ("low,high", "low", None),
+        (["Auto", "High"], "low", None),
+    ],
+)
+def test_match_fan_mode(fan_modes, desired, expected):
+    from custom_components.roommind.control.mpc_controller import match_fan_mode
+
+    state = MagicMock()
+    state.attributes = {"fan_modes": fan_modes}
+    assert match_fan_mode(state, desired) == expected

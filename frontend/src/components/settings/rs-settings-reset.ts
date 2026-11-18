@@ -6,6 +6,11 @@ import { RsSettingsBase } from "./rs-settings-base";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant, RoomConfig } from "../../types";
 import { localize } from "../../utils/localize";
+import { errorText } from "../../utils/errors";
+import { showToast } from "../../utils/toast";
+import { alertStyles } from "../../styles/tokens";
+import "../shared/rs-icon-button";
+import "../shared/rs-confirm-button";
 import { fireSaveStatus, getSelectValue } from "../../utils/events";
 
 @customElement("rs-settings-reset")
@@ -14,34 +19,37 @@ export class RsSettingsReset extends RsSettingsBase {
   @property({ attribute: false }) public rooms: Record<string, RoomConfig> = {};
 
   @state() private _resetSelectedRoom = "";
+  @state() private _error = "";
 
   render() {
     const l = this.hass.language;
-    const configuredRooms = Object.entries(this.rooms)
-      .map(([areaId]) => ({
-        areaId,
-        name: this.hass.areas?.[areaId]?.name ?? areaId,
-      }))
+    // Every room: one without a model (outdoor area, sensors only) still has a history to drop
+    const configuredRooms = Object.keys(this.rooms)
+      .map((areaId) => ({ areaId, name: this._roomName(areaId) }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return html`
+      ${this._error ? html`<p class="rs-alert" role="alert">${this._error}</p>` : nothing}
       <div class="settings-section first">
         <div class="reset-row">
           <div class="reset-text">
-            <span class="toggle-label">${localize("settings.reset_all_label", l)}</span>
-            <span class="toggle-hint">${localize("settings.reset_all_hint", l)}</span>
+            <span class="label">${localize("settings.reset_all_label", l)}</span>
+            <span class="note">${localize("settings.reset_all_hint", l)}</span>
           </div>
-          <button class="reset-btn" @click=${this._resetAllModels}>
-            <ha-icon icon="mdi:restart-alert"></ha-icon>
-            ${localize("settings.reset_all_btn", l)}
-          </button>
+          <rs-confirm-button
+            destructive
+            icon="mdi:restart-alert"
+            .label=${localize("settings.reset_all_btn", l)}
+            .confirmMessage=${localize("settings.reset_all_confirm", l)}
+            @confirmed=${this._resetAllModels}
+          ></rs-confirm-button>
         </div>
       </div>
 
       <div class="settings-section">
         <div class="reset-text" style="margin-bottom: 12px">
-          <span class="toggle-label">${localize("settings.reset_room_label", l)}</span>
-          <span class="toggle-hint">${localize("settings.reset_room_hint", l)}</span>
+          <span class="label">${localize("settings.reset_room_label", l)}</span>
+          <span class="note">${localize("settings.reset_room_hint", l)}</span>
         </div>
         ${
           configuredRooms.length > 0
@@ -67,23 +75,25 @@ export class RsSettingsReset extends RsSettingsBase {
                   </ha-select>
                   ${
                     this._resetSelectedRoom
-                      ? html`<ha-icon-button
-                          .path=${"M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"}
+                      ? html`<rs-icon-button
+                          size="sm"
+                          icon="mdi:close"
+                          .label=${localize("common.clear_selection", l)}
                           @click=${() => {
                             this._resetSelectedRoom = "";
                           }}
-                        ></ha-icon-button>`
+                        ></rs-icon-button>`
                       : nothing
                   }
-                  <button
-                    class="reset-btn"
-                    ?disabled=${!this._resetSelectedRoom}
-                    @click=${() =>
+                  <rs-confirm-button
+                    destructive
+                    icon="mdi:restart"
+                    .label=${localize("settings.reset_btn", l)}
+                    .confirmMessage=${localize(this._confirmKey(this._resetSelectedRoom), l)}
+                    .disabled=${!this._resetSelectedRoom}
+                    @confirmed=${() =>
                       this._resetSelectedRoom && this._resetRoomModel(this._resetSelectedRoom)}
-                  >
-                    <ha-icon icon="mdi:restart"></ha-icon>
-                    ${localize("settings.reset_btn", l)}
-                  </button>
+                  ></rs-confirm-button>
                 </div>
               `
             : html`<p class="hint">${localize("settings.reset_no_rooms", l)}</p>`
@@ -92,32 +102,64 @@ export class RsSettingsReset extends RsSettingsBase {
     `;
   }
 
+  /**
+   * Outdoor areas and rooms without any temperature source (no sensor, no device) learn no
+   * model; a reset only deletes their history. A room with only a sensor does learn one.
+   */
+  private _historyOnly(areaId: string): boolean {
+    const room = this.rooms[areaId];
+    if (!room) return false;
+    return !!room.is_outdoor || (!room.temperature_sensor && !room.devices?.length);
+  }
+
+  private _confirmKey(areaId: string) {
+    if (!this._historyOnly(areaId)) return "settings.reset_room_confirm";
+    return this.rooms[areaId]?.is_outdoor
+      ? "settings.reset_room_confirm_history"
+      : "settings.reset_room_confirm_no_model";
+  }
+
+  private _roomName(areaId: string): string {
+    return this.rooms[areaId]?.display_name || this.hass.areas?.[areaId]?.name || areaId;
+  }
+
   private async _resetRoomModel(areaId: string) {
     const l = this.hass.language;
-    if (!confirm(localize("settings.reset_room_confirm", l))) return;
+    this._error = "";
     try {
       fireSaveStatus(this, "saving");
       await this.hass.callWS({ type: "roommind/thermal/reset", area_id: areaId });
       fireSaveStatus(this, "saved");
-    } catch {
+      this._resetSelectedRoom = "";
+      const done = this._historyOnly(areaId)
+        ? "settings.reset_done_history"
+        : "settings.reset_done";
+      showToast(this, localize(done, l, { room: this._roomName(areaId) }), l);
+    } catch (err) {
+      const l = this.hass.language;
+      this._error = errorText(err, localize("error.unknown", l), l);
       fireSaveStatus(this, "error");
     }
   }
 
-  private async _resetAllModels() {
-    const l = this.hass.language;
-    if (!confirm(localize("settings.reset_all_confirm", l))) return;
+  private _resetAllModels = async () => {
+    this._error = "";
     try {
       fireSaveStatus(this, "saving");
       await this.hass.callWS({ type: "roommind/thermal/reset_all" });
       fireSaveStatus(this, "saved");
-    } catch {
+      this._resetSelectedRoom = "";
+      showToast(this, localize("settings.reset_all_done", this.hass.language), this.hass.language);
+    } catch (err) {
+      const l = this.hass.language;
+      this._error = errorText(err, localize("error.unknown", l), l);
       fireSaveStatus(this, "error");
     }
-  }
+  };
 
   static styles = [
     RsSettingsBase.settingsBaseStyles,
+    alertStyles,
     css`
       .hint {
         color: var(--secondary-text-color);
@@ -136,45 +178,25 @@ export class RsSettingsReset extends RsSettingsBase {
         flex-direction: column;
         gap: 4px;
         flex: 1;
+        min-width: 0;
       }
-
-      .reset-btn {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 8px 14px;
-        border: 1px solid var(--error-color, #d32f2f);
-        border-radius: 8px;
-        background: transparent;
-        color: var(--error-color, #d32f2f);
-        font-size: 13px;
-        font-family: inherit;
-        cursor: pointer;
-        transition: background 0.15s;
-        --mdc-icon-size: 16px;
-        white-space: nowrap;
-      }
-      .reset-btn:hover {
-        background: rgba(211, 47, 47, 0.08);
-      }
-      .reset-btn:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-      }
-      .reset-btn:disabled:hover {
-        background: transparent;
+      .label {
+        font-size: var(--rs-font-md);
+        font-weight: 500;
       }
 
       .reset-room-row {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 12px;
       }
       .reset-room-row ha-select {
-        flex: 1;
+        flex: 1 1 200px;
+        min-width: 0;
       }
 
-      @media (max-width: 600px) {
+      @container (max-width: 520px) {
         .reset-row {
           flex-direction: column;
           align-items: flex-start;

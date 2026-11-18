@@ -1,0 +1,28 @@
+name: ufh-ac-summer-cooling
+extends: ekf-summer-ac
+description: >
+  The sunny south room with underfloor heating and a split AC in auto mode. Cooling runs
+  on the AC, so the optimizer plans them with the AC's 10-minute min run like the
+  controller's guard, not with the screed's 30 minutes.
+refs: [35]
+tags: [ac, ufh, mpc]
+duration: 4d
+house:
+  rooms:
+    wohnzimmer:
+      devices:
+        - {entity_id: climate.wz_fbh, profile: ufh_zone}
+        - {entity_id: climate.wz_ac, profile: generic_split_ac, cool_capacity_w: 3500}
+roommind:
+  rooms:
+    wohnzimmer:
+      devices:
+        - {entity_id: climate.wz_fbh, type: trv, heating_system_type: underfloor, setpoint_mode: direct}
+        - {entity_id: climate.wz_ac, type: ac}
+      climate_mode: auto
+      comfort_heat: 21.0
+      eco_heat: 18.0
+expect:
+  - {invariant: no_rejected_commands}
+  - {invariant: min_run_commanded}
+  - {metric: comfort.overshoot_kh, room: wohnzimmer, max: 9}

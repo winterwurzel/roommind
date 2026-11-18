@@ -5,13 +5,23 @@ releasing stored energy into the room.  This module provides functions to
 compute the decaying residual heat fraction so that the EKF and MPC can
 account for it instead of mis-attributing the continued warming to solar
 gain or insulation effects.
+
+The AC counterpart is the rebound charge: an AC cools the air, which drops
+below the building mass and warms back up after the run (see thermal_model).
 """
 
 from __future__ import annotations
 
 import math
 
-from ..const import HEATING_SYSTEM_PROFILES, RESIDUAL_HEAT_CUTOFF
+from ..const import (
+    AC_REBOUND_CUTOFF,
+    AC_REBOUND_TAU_MINUTES,
+    HEATING_SYSTEM_PROFILES,
+    HEATING_SYSTEM_RADIATOR,
+    RADIATOR_SHORT_RUN_AFTERGLOW_K,
+    RESIDUAL_HEAT_CUTOFF,
+)
 
 
 def compute_residual_heat(
@@ -19,6 +29,8 @@ def compute_residual_heat(
     system_type: str,
     last_power_fraction: float = 1.0,
     heating_duration_minutes: float = 0.0,
+    scale: float = 1.0,
+    tau_minutes: float | None = None,
 ) -> float:
     """Compute normalised residual heat fraction after heating stopped.
 
@@ -34,18 +46,22 @@ def compute_residual_heat(
         system_type: Key into ``HEATING_SYSTEM_PROFILES`` (e.g. "underfloor").
         last_power_fraction: Power fraction that was active before stopping.
         heating_duration_minutes: How long heating was active before stopping.
+        scale: Learned per-room multiplier on the profile's ``initial_fraction``
+            (see ``ResidualHeatLearner``); 1.0 is the profile as is.
+        tau_minutes: Learned per-room decay time of the afterglow; None uses the
+            profile's ``tau_minutes``. The charge time stays the profile's.
 
     Returns:
-        Residual heat fraction in [0, 1].  Returns 0.0 for unknown or empty
+        Residual heat fraction in [0, initial_fraction * scale].  Returns 0.0 for unknown or empty
         system types (backwards-compatible default).
     """
     profile = HEATING_SYSTEM_PROFILES.get(system_type)
     if not profile or elapsed_minutes < 0:
         return 0.0
 
-    tau = profile["tau_minutes"]
     initial = profile["initial_fraction"]
-    tau_charge = profile.get("tau_charge_minutes", tau)
+    tau_charge = profile.get("tau_charge_minutes", profile["tau_minutes"])
+    tau = profile["tau_minutes"] if tau_minutes is None else tau_minutes
 
     if tau <= 0:
         return 0.0
@@ -56,7 +72,7 @@ def compute_residual_heat(
     else:
         charge_fraction = 1.0  # assume fully charged if duration unknown
 
-    q = initial * charge_fraction * math.exp(-elapsed_minutes / tau) * last_power_fraction
+    q = initial * scale * charge_fraction * math.exp(-elapsed_minutes / tau) * last_power_fraction
     return q if q >= RESIDUAL_HEAT_CUTOFF else 0.0
 
 
@@ -67,6 +83,8 @@ def build_residual_series(
     dt_minutes: float = 5.0,
     last_power_fraction: float = 1.0,
     heating_duration_minutes: float = 0.0,
+    scale: float = 1.0,
+    tau_minutes: float | None = None,
 ) -> list[float]:
     """Build a decaying residual heat series for MPC lookahead.
 
@@ -82,9 +100,19 @@ def build_residual_series(
             system_type,
             last_power_fraction,
             heating_duration_minutes,
+            scale,
+            tau_minutes,
         )
         for i in range(n_blocks)
     ]
+
+
+def residual_tau(system_type: str, learned: float | None = None) -> float:
+    """Decay time of *system_type*'s afterglow: the room's learned one, else the profile's (0.0 without one)."""
+    if learned is not None:
+        return learned
+    profile = HEATING_SYSTEM_PROFILES.get(system_type)
+    return float(profile["tau_minutes"]) if profile else 0.0
 
 
 def get_min_run_blocks(system_type: str, dt_minutes: float = 5.0) -> int:
@@ -97,3 +125,66 @@ def get_min_run_blocks(system_type: str, dt_minutes: float = 5.0) -> int:
     if not profile or dt_minutes <= 0:
         return 2  # existing default
     return max(2, math.ceil(profile["min_run_minutes"] / dt_minutes))
+
+
+def heat_min_run_blocks(
+    system_type: str,
+    dt_minutes: float = 5.0,
+    *,
+    q_heat: float = 0.0,
+    scale: float = 1.0,
+    tau_minutes: float | None = None,
+    fast_heater: bool = False,
+) -> int:
+    """Minimum heating run in blocks, shortened for radiators that store a lot of heat.
+
+    The rise the stored heat of one regular min run gives after the stop (learned
+    ``scale`` and decay ``tau_minutes``, full power, losses left out) above
+    ``RADIATOR_SHORT_RUN_AFTERGLOW_K`` makes the run a single block: the heat of the
+    regular one alone would carry the room past its target. Not with a heat-capable AC
+    in the room (``fast_heater``): ``q_heat`` is then the split's, and its compressor
+    must not run 5-min cycles.
+    """
+    base = get_min_run_blocks(system_type, dt_minutes)
+    if fast_heater or system_type != HEATING_SYSTEM_RADIATOR or q_heat <= 0 or dt_minutes <= 0:
+        return base
+    rise = afterglow_rise_k(system_type, q_heat, base * dt_minutes, scale, tau_minutes)
+    return 1 if rise > RADIATOR_SHORT_RUN_AFTERGLOW_K else base
+
+
+def afterglow_rise_k(
+    system_type: str,
+    q_heat: float,
+    run_minutes: float,
+    scale: float = 1.0,
+    tau_minutes: float | None = None,
+) -> float:
+    """How far the stored heat of a full-power run of *run_minutes* lifts the room after the stop.
+
+    The whole afterglow (initial share x decay time), losses left out.
+    """
+    q0 = compute_residual_heat(0.0, system_type, 1.0, run_minutes, scale, tau_minutes)
+    return q_heat * q0 * residual_tau(system_type, tau_minutes) / 60.0
+
+
+def advance_rebound(charge: float, drive: float, dt_minutes: float) -> float:
+    """AC rebound charge after *dt_minutes*.
+
+    The charge (0..1) is the air's offset below the building mass relative to a
+    long run. It relaxes towards *drive* (1 while the AC cools, 0 otherwise) with
+    ``AC_REBOUND_TAU_MINUTES``. On/off, not the power fraction: a unit runs near
+    full power until its own sensor is satisfied, a low proportional setpoint
+    does not change that.
+    """
+    if dt_minutes <= 0:
+        return charge
+    result = drive + (charge - drive) * math.exp(-dt_minutes / AC_REBOUND_TAU_MINUTES)
+    return result if result >= AC_REBOUND_CUTOFF else 0.0
+
+
+def mean_rebound(charge: float, drive: float, dt_minutes: float) -> float:
+    """Mean charge over *dt_minutes* starting at *charge* (the ``q_rebound`` of that step)."""
+    if dt_minutes <= 0:
+        return charge
+    tau = AC_REBOUND_TAU_MINUTES
+    return drive + (charge - drive) * tau / dt_minutes * (1.0 - math.exp(-dt_minutes / tau))

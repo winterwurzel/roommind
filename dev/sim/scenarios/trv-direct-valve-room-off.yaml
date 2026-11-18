@@ -1,0 +1,30 @@
+name: trv-direct-valve-room-off
+extends: trv-direct-valve
+description: >
+  The valve-controlled TRVZB with idle action "low" (min_temp instead of off, against Zigbee
+  deep sleep), and the room switched off through its climate entity in the middle of an
+  evening heating run. Off sends min_temp and hands the valve back. The hand-back also sent
+  the room target after that, so the TRV, still in heat, regulated the room to comfort on
+  its own sensor while the room entity showed off. Here the boiler is the group master and
+  stops with the room, so the sim shows the wrong setpoint but no heat; a boiler on its own
+  heating curve would have heated (9aaf7f9: TRV in heat at 21.0 from 17:05 on, main: 4.0).
+refs: [413, 238]
+tags: [trv, direct-valve, entities]
+duration: 2d
+roommind:
+  rooms:
+    wohnzimmer:
+      devices:
+        - entity_id: climate.wz_trv
+          type: trv
+          heating_system_type: radiator
+          idle_action: low
+          valve_opening_entity: number.wz_trv_valve_opening_degree
+          valve_closing_entity: number.wz_trv_valve_closing_degree
+timeline:
+  - {at: "+1d17h", do: ha.service, service: climate.set_hvac_mode, data: {entity_id: climate.roommind_wohnzimmer, hvac_mode: "off"}}
+expect:
+  - {invariant: no_rejected_commands}
+  - {check: "dev('climate.wz_trv').valve_open_deg < 100", at: "+1d16h55m", label: valve held while heating before the switch-off}
+  - {check: "dev('climate.wz_trv').valve_open_deg == 100 and dev('climate.wz_trv').target < 10", at: "+1d17h05m", label: "valve handed back with min_temp, not the room target"}
+  - {check: "dev('climate.wz_trv').target < 10 and not dev('climate.wz_trv').active", at: "+1d22h", label: TRV keeps min_temp while the room is off}

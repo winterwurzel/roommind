@@ -331,7 +331,7 @@ async def test_dynamic_heating_boost_trv_full_power():
     hass = build_hass()
     trv_state = MagicMock()
     trv_state.state = "off"
-    trv_state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 20.0, "max_temp": 35.0}
+    trv_state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 20.5, "max_temp": 35.0}
     hass.states.get = MagicMock(return_value=trv_state)
 
     room = make_room(thermostats=["climate.trv"], acs=[])
@@ -346,7 +346,7 @@ async def test_dynamic_heating_boost_trv_full_power():
     await ctrl.async_apply("heating", 21.0, power_fraction=1.0, current_temp=20.0, heating_boost_target=35.0)
 
     temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
-    assert any(c[0][2]["temperature"] == 35.0 for c in temp_calls)
+    assert any(c[0][2]["temperature"] == 34.5 for c in temp_calls)
 
 
 @pytest.mark.asyncio
@@ -452,7 +452,7 @@ async def test_dynamic_ac_heating_boost():
     hass = build_hass()
     ac_state = MagicMock()
     ac_state.state = "off"
-    ac_state.attributes = {"hvac_modes": ["heat", "cool", "off"], "temperature": 20.0, "max_temp": 28.0}
+    ac_state.attributes = {"hvac_modes": ["heat", "cool", "off"], "temperature": 20.5, "max_temp": 28.0}
     hass.states.get = MagicMock(return_value=ac_state)
 
     room = make_room(thermostats=[], acs=["climate.ac"])
@@ -467,7 +467,7 @@ async def test_dynamic_ac_heating_boost():
     await ctrl.async_apply("heating", 21.0, power_fraction=1.0, current_temp=20.0, ac_heating_boost_target=28.0)
 
     temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
-    assert any(c[0][2]["temperature"] == 28.0 for c in temp_calls)
+    assert any(c[0][2]["temperature"] == 27.5 for c in temp_calls)
 
 
 def _ctrl_with_cw(cw):
@@ -532,11 +532,11 @@ async def test_ac_boost_cap_limits_setpoint_at_efficiency():
 
 @pytest.mark.asyncio
 async def test_ac_boost_cap_does_not_apply_at_comfort():
-    """At comfort/default the cap is unbounded; AC reaches boost as today."""
+    """At comfort/default the efficiency cap does not bind; the boost is only trimmed one step below max_temp (#396)."""
     hass = build_hass()
     ac_state = MagicMock()
     ac_state.state = "heat"
-    ac_state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 21.0, "min_temp": 16.0, "max_temp": 30.0}
+    ac_state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 21.5, "min_temp": 16.0, "max_temp": 30.0}
     hass.states.get = MagicMock(return_value=ac_state)
 
     room = make_room(thermostats=[], acs=["climate.ac"])
@@ -551,7 +551,7 @@ async def test_ac_boost_cap_does_not_apply_at_comfort():
     await ctrl.async_apply("heating", 21.0, power_fraction=1.0, current_temp=18.0)
     set_temp = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
     assert set_temp
-    assert set_temp[-1][0][2]["temperature"] == 30.0
+    assert set_temp[-1][0][2]["temperature"] == 29.5
 
 
 @pytest.mark.asyncio
@@ -605,9 +605,10 @@ def _mock_device(hass, setpoint):
     return dev
 
 
-def test_proportional_deadband_helper_disabled_at_comfort():
+def test_proportional_deadband_helper_exact_at_comfort():
     _, ctrl = _make_controller(None)  # cw=70 default
-    assert ctrl._proportional_deadband("climate.x", 18.0, 22.0) is None
+    # 0.0 still marks the send as proportional (setpoint dwell) but compares exactly
+    assert ctrl._proportional_deadband("climate.x", 18.0, 22.0) == 0.0
 
 
 def test_proportional_deadband_helper_values_at_efficiency():

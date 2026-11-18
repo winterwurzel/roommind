@@ -1,0 +1,18 @@
+name: covers-solar-south-legacy-comfort
+extends: covers-solar-south
+description: >
+  covers-solar-south configured the old way (API, pre-panel configs): a cool_only room
+  with a single comfort_temp/eco_temp. Stored as the heat side next to the default
+  comfort_cool 24.0, that gave an inverted band (heat 24.5 / cool 24.0): the optimizer
+  and the cover target used 24.5, guard, hysteresis and the panel 24.0. In a cool_only
+  room the single value is the cooling target.
+roommind:
+  rooms:
+    wohnzimmer:
+      comfort_cool-: ~
+      eco_cool-: ~
+      comfort_temp: 24.5
+      eco_temp: 27.0
+expect+:
+  - {check: "room.wohnzimmer.cool_target == 24.5", at: "+1d12h", label: single comfort_temp is the cool target}
+  - {check: "room.wohnzimmer.heat_target is None or room.wohnzimmer.heat_target <= room.wohnzimmer.cool_target", at: "+1d12h", label: no inverted band}

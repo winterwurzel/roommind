@@ -1,0 +1,46 @@
+name: override-entity-set-temperature
+description: >
+  The deprecated per-room override entity on an auto room, driven by an automation with
+  climate.set_temperature: a bare temperature widens to a band like it did before the
+  heat/cool split (#313), a range with hvac_mode heat_cool sets both sides, hvac off clears.
+refs: [471]
+tags: [entities, override, ac]
+start: 2026-01-12T00:00
+duration: 1d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    wohnzimmer:
+      floor_area_m2: 25
+      initial: {temperature: 19.0}
+      devices: [{entity_id: climate.wohnzimmer_ac, profile: generic_split_ac}]
+      sensors: {temperature: {entity_id: sensor.wohnzimmer_temp}}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wohnzimmer_ac, type: ac}]
+      temperature_sensor: sensor.wohnzimmer_temp
+      climate_mode: auto
+      comfort_heat: 21.0
+      comfort_cool: 24.0
+      eco_heat: 18.0
+      eco_cool: 27.0
+external_entities: [climate.roommind_wohnzimmer_override]
+timeline:
+  # Rooms set up since 2.0 get the deprecated entity disabled; enable it like an install from before
+  - {at: "+0d00h10m", do: roommind.ws, type: config/entity_registry/update, entity_id: climate.roommind_wohnzimmer_override, disabled_by: null}
+  - {at: "+0d00h11m", do: roommind.reload}
+  - {at: "+0d10h", do: ha.service, service: climate.set_temperature, data: {entity_id: climate.roommind_wohnzimmer_override, temperature: 22.5}}
+  - {at: "+0d12h", do: ha.service, service: climate.set_hvac_mode, data: {entity_id: climate.roommind_wohnzimmer_override, hvac_mode: "off"}}
+  - {at: "+0d14h", do: ha.service, service: climate.set_temperature, data: {entity_id: climate.roommind_wohnzimmer_override, target_temp_low: 19.0, target_temp_high: 26.0, hvac_mode: heat_cool}}
+  - {at: "+0d16h", do: ha.service, service: climate.set_hvac_mode, data: {entity_id: climate.roommind_wohnzimmer_override, hvac_mode: "off"}}
+expect:
+  - {check: "room.wohnzimmer.override_active == true and room.wohnzimmer.heat_target == 22.5 and room.wohnzimmer.cool_target == 24.0", at: "+0d10h05m", label: bare temperature widens to a band}
+  - {check: "room.wohnzimmer.override_active == false and room.wohnzimmer.heat_target == 21.0", at: "+0d12h05m", label: hvac off clears the override}
+  - {check: "room.wohnzimmer.override_active == true and room.wohnzimmer.heat_target == 19.0 and room.wohnzimmer.cool_target == 26.0", at: "+0d14h05m", label: range with hvac_mode sets both sides}
+  - {check: "room.wohnzimmer.override_active == false", at: "+0d16h05m", label: hvac off clears the range override}

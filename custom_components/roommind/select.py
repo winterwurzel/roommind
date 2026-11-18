@@ -10,6 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CLIMATE_MODE_AUTO, CLIMATE_MODES, DOMAIN
 from .coordinator import RoomMindCoordinator
+from .utils.area_utils import rooms_with_area
 
 
 def _create_room_selects(
@@ -30,7 +31,7 @@ async def async_setup_entry(
     store = hass.data[DOMAIN]["store"]
     coordinator.async_add_select_entities = async_add_entities
 
-    rooms = store.get_rooms()
+    rooms = rooms_with_area(hass, store.get_rooms())
     entities: list[SelectEntity] = []
     for area_id in rooms:
         entities.extend(_create_room_selects(coordinator, area_id))

@@ -339,10 +339,14 @@ class TestGhostHeatingGuard:
         assert kwargs["ekf_mode"] == MODE_COOLING
 
     @pytest.mark.asyncio
-    async def test_zero_power_with_active_mode_normalizes_to_idle(self, hass, mock_config_entry):
+    @pytest.mark.parametrize("observable", [False, True])
+    async def test_zero_power_with_active_mode_normalizes_to_idle(self, hass, mock_config_entry, observable):
         """Commanded heating with ekf_pf==0 (e.g. after heat source plan
         selected zero active devices) should normalize to idle so the EKF
-        predict step doesn't inflate Q_BETA_H with a zero-gradient Jacobian."""
+        predict step doesn't inflate Q_BETA_H with a zero-gradient Jacobian.
+
+        Unless the parked devices report heating: they deliver, so the step is
+        trained as heating at the observed share."""
         from unittest.mock import patch
 
         from custom_components.roommind.managers.heat_source_orchestrator import (
@@ -376,9 +380,8 @@ class TestGhostHeatingGuard:
         room["acs"] = ["climate.living_room_ac"]
 
         # Plan commands both devices with pf=0 — unusual but possible under
-        # tight gating conditions.  Observed hvac_action is "heating" on at
-        # least one device (so the ghost-guard does NOT trigger — we want to
-        # isolate the zero-pf branch).
+        # tight gating conditions. Without hvac_action the ghost guard cannot
+        # fire and the label falls back to the plan's pf=0.
         zero_plan = HeatSourcePlan(
             commands=[
                 DeviceCommand(
@@ -401,6 +404,7 @@ class TestGhostHeatingGuard:
             active_sources="none",
             reason="all gated",
         )
+        action = {"hvac_action": "heating"} if observable else {}
 
         states_get = make_mock_states_get(
             temp="19.5",
@@ -410,12 +414,12 @@ class TestGhostHeatingGuard:
             extra={
                 "climate.living_room": (
                     "heat",
-                    {"hvac_action": "heating", "current_temperature": 19.5, "temperature": 21.0},
+                    {**action, "current_temperature": 19.5, "temperature": 21.0},
                 ),
                 "climate.living_room_ac": (
                     "heat",
                     {
-                        "hvac_action": "heating",
+                        **action,
                         "hvac_modes": ["off", "heat", "cool", "heat_cool"],
                         "current_temperature": 19.5,
                         "temperature": 21.0,
@@ -442,8 +446,11 @@ class TestGhostHeatingGuard:
 
         assert training_mock.called
         kwargs = training_mock.call_args.kwargs
+        if observable:
+            assert kwargs["ekf_mode"] == MODE_HEATING
+            assert kwargs["ekf_pf"] == 1.0
+            return
         # With all plan commands at pf=0, mean(pf)=0 → zero-pf normalize
-        # forces the mode to idle regardless of the observed heating action.
         assert kwargs["ekf_pf"] == 0.0
         assert kwargs["ekf_mode"] == MODE_IDLE
         assert kwargs["q_residual"] == 0.0

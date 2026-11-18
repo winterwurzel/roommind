@@ -100,7 +100,7 @@ def test_estimate_surface_temp_warm_outside():
 
 def test_calculate_mold_risk_ok():
     """Normal conditions: 20°C, 45% RH, 10°C outside → ok."""
-    level, srh = calculate_mold_risk(20.0, 45.0, 10.0)
+    level, srh, _t = calculate_mold_risk(20.0, 45.0, 10.0)
     assert level == "ok"
     assert srh < 65.0
 
@@ -108,45 +108,114 @@ def test_calculate_mold_risk_ok():
 def test_calculate_mold_risk_warning():
     """Higher humidity with cool outside → warning (surface RH 70-80%)."""
     # 20°C, 60% RH, 5°C outside → surface 16.25°C (f_Rsi=0.75), surface RH ~76%
-    level, srh = calculate_mold_risk(20.0, 60.0, 5.0)
+    level, srh, _t = calculate_mold_risk(20.0, 60.0, 5.0)
     assert level == "warning"
     assert 70.0 <= srh < 80.0
 
 
 def test_calculate_mold_risk_critical():
     """High humidity with very cold outside → critical."""
-    level, srh = calculate_mold_risk(18.0, 75.0, -5.0)
+    level, srh, _t = calculate_mold_risk(18.0, 75.0, -5.0)
     assert level == "critical"
     assert srh >= 80.0
 
 
 def test_calculate_mold_risk_no_outdoor_temp():
     """Fallback: no outdoor temp → uses room RH + 10% offset."""
-    level, srh = calculate_mold_risk(20.0, 45.0, None)
+    level, srh, _t = calculate_mold_risk(20.0, 45.0, None)
     assert level == "ok"
     assert srh == pytest.approx(55.0, abs=0.1)
 
     # High room RH → warning in fallback mode
-    level2, srh2 = calculate_mold_risk(20.0, 60.0, None)
+    level2, srh2, _t2 = calculate_mold_risk(20.0, 60.0, None)
     assert level2 == "warning"
 
     # Very high room RH → critical in fallback mode
-    level3, srh3 = calculate_mold_risk(20.0, 72.0, None)
+    level3, srh3, _t3 = calculate_mold_risk(20.0, 72.0, None)
     assert level3 == "critical"
-
-
-def test_calculate_mold_risk_below_min_growth_temp():
-    """Very cold surface (< 5°C) → ok regardless of humidity."""
-    # Room 10°C, outside -20°C → surface ≈ -20 + 0.7 * 30 = 1°C
-    level, srh = calculate_mold_risk(10.0, 90.0, -20.0)
-    assert level == "ok"
-    assert srh == 0.0
 
 
 def test_calculate_mold_risk_warm_conditions_ok():
     """Warm outside, moderate humidity → always ok."""
-    level, srh = calculate_mold_risk(22.0, 55.0, 20.0)
+    level, srh, _t = calculate_mold_risk(22.0, 55.0, 20.0)
     assert level == "ok"
+
+
+def test_calculate_mold_risk_respects_custom_f_rsi():
+    """A lower f_Rsi (worse insulation) must produce a colder surface and
+    therefore a higher surface RH for the same room/outdoor conditions.
+    """
+    # 20°C inside, 0°C outside, 60% RH → warning with default f_Rsi=0.80
+    # surface = 0 + 0.80 * 20 = 16°C; surface RH ≈ 77% (warning)
+    level_default, srh_default, _ = calculate_mold_risk(20.0, 60.0, 0.0)
+    assert level_default == "warning"
+
+    # Worse insulation (f_Rsi=0.60) → colder wall → higher surface RH
+    level_poor, srh_poor, _ = calculate_mold_risk(20.0, 60.0, 0.0, f_rsi=0.60)
+    assert srh_poor > srh_default
+
+    # Better insulation (f_Rsi=1.0) → wall equals indoor → surface RH ≈ room RH
+    level_good, srh_good, _ = calculate_mold_risk(20.0, 60.0, 0.0, f_rsi=1.0)
+    assert srh_good < srh_default
+    assert srh_good == pytest.approx(60.0, abs=1.0)
+
+
+def test_calculate_mold_risk_f_rsi_can_change_risk_level():
+    """A sufficiently high f_Rsi can demote a borderline critical case to
+    warning or below — and a low f_Rsi can promote a borderline case.
+    """
+    # 20°C inside, 70% RH, -5°C outside → critical with default f_Rsi=0.80
+    # surface = -5 + 0.80 * 25 = 15°C; surface RH > 95% (critical)
+    _, srh_default, _ = calculate_mold_risk(20.0, 70.0, -5.0)
+    level_default, _, _ = calculate_mold_risk(20.0, 70.0, -5.0)
+    assert level_default == "critical"
+
+    # Better insulation reduces the risk level
+    level_better, srh_better, _ = calculate_mold_risk(20.0, 70.0, -5.0, f_rsi=0.95)
+    assert srh_better < srh_default
+    assert level_better in ("warning", "ok")
+
+    # Poor insulation promotes a borderline warning: 20°C, 60% RH, 0°C → warning at 0.80
+    assert calculate_mold_risk(20.0, 60.0, 0.0)[0] == "warning"
+    assert calculate_mold_risk(20.0, 60.0, 0.0, f_rsi=0.65)[0] == "critical"
+
+
+def test_calculate_mold_risk_returns_surface_temp():
+    """calculate_mold_risk returns the estimated wall surface temperature
+    alongside the risk level and surface RH.  It must be a number between
+    outdoor and indoor temperature, and None when no outdoor temp is
+    available.
+    """
+    level, srh, t_surface = calculate_mold_risk(20.0, 60.0, 0.0)
+    assert level == "warning"
+    assert srh >= 70.0
+    # f_Rsi=0.80: surface = 0 + 0.80 * (20 - 0) = 16.0
+    assert t_surface == pytest.approx(16.0, abs=0.1)
+
+    # Custom f_Rsi is reflected in surface_temp as well
+    _, _, t_surface_better = calculate_mold_risk(20.0, 60.0, 0.0, f_rsi=1.0)
+    assert t_surface_better == pytest.approx(20.0, abs=0.1)
+
+    # No outdoor → surface_temp is None
+    _, _, t_surface_none = calculate_mold_risk(20.0, 60.0, None)
+    assert t_surface_none is None
+
+
+def test_calculate_mold_risk_cold_surface_still_reports_the_risk():
+    """A wall below 5 °C is where condensate forms first: no "ok" with surface RH 0."""
+    # Room 10°C, outside -20°C, f_Rsi=0.80 → surface = -20 + 0.80*30 = 4°C, dew point ~8.5°C
+    level, srh, t_surface = calculate_mold_risk(10.0, 90.0, -20.0)
+    assert level == "critical"
+    assert srh == 100.0
+    assert t_surface == pytest.approx(4.0, abs=0.1)
+
+
+def test_calculate_mold_risk_cold_dry_surface_is_ok():
+    # Same cold wall, dry air (dew point ~-10°C): no risk, and the real surface RH is reported
+    level, srh, t_surface = calculate_mold_risk(10.0, 25.0, -20.0)
+    assert level == "ok"
+    assert 0.0 < srh < 70.0
+    assert t_surface == pytest.approx(4.0, abs=0.1)
 
 
 # --- mold_prevention_delta ---
@@ -183,20 +252,20 @@ def test_mold_prevention_delta_unknown_falls_back():
 )
 def test_calculate_mold_risk_boundary_levels(rh_room, t_outdoor, expected_level):
     """Verify risk level at critical boundary values."""
-    level, _srh = calculate_mold_risk(20.0, rh_room, t_outdoor)
+    level, _srh, _st = calculate_mold_risk(20.0, rh_room, t_outdoor)
     assert level == expected_level
 
 
 def test_calculate_mold_risk_fallback_at_threshold():
     """Fallback mode: room RH 60% + 10% offset = 70% → exactly at warning."""
-    level, srh = calculate_mold_risk(20.0, 60.0, None)
+    level, srh, _t = calculate_mold_risk(20.0, 60.0, None)
     assert srh == pytest.approx(70.0, abs=0.1)
     assert level == "warning"
 
 
 def test_calculate_mold_risk_fallback_below_warning():
     """Fallback mode: room RH 59% + 10% = 69% → ok."""
-    level, srh = calculate_mold_risk(20.0, 59.0, None)
+    level, srh, _t = calculate_mold_risk(20.0, 59.0, None)
     assert srh == pytest.approx(69.0, abs=0.1)
     assert level == "ok"
 

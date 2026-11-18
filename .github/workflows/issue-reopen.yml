@@ -2,7 +2,7 @@ name: Issue Reopen
 
 on:
   issues:
-    types: [closed]
+    types: [closed, reopened]
   issue_comment:
     types: [created]
 
@@ -76,9 +76,54 @@ jobs:
               state: 'open'
             });
 
+            // A reopen by GITHUB_TOKEN fires no `reopened` run, so reset the labels here too.
+            for (const name of ['waiting for feedback', 'stale', 'fix-released']) {
+              if (labels.includes(name)) {
+                // stale-issues.yml removes `stale` on the same comment; a lost race answers 404.
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name
+                }).catch(e => { if (e.status !== 404) throw e; });
+              }
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: ['needs-attention']
+            });
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
               body: `Reopened by issue author @${commenter}.`
             });
+
+  reset-labels-on-reopen:
+    # Without this the stale workflow closes a reopened issue again as resolved.
+    if: github.event_name == 'issues' && github.event.action == 'reopened'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Drop feedback labels
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = issue.labels.map(l => l.name);
+
+            for (const name of ['waiting for feedback', 'stale', 'fix-released']) {
+              if (labels.includes(name)) {
+                // stale-issues.yml removes `stale` on the same comment; a lost race answers 404.
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name
+                }).catch(e => { if (e.status !== 404) throw e; });
+              }
+            }

@@ -1,0 +1,28 @@
+name: covers-shade-before-cooling
+extends: ekf-summer-ac
+description: >
+  Shade first, cool the rest: the 3.5 kW AC of ekf-summer-ac holds the south room on
+  its own, so a cover decision based on the plan with cooling never shaded (the room
+  was cooled with electricity while the sun shone in). The blind must close on sunny
+  days because of the solar load, without following the compressor cycle (an earlier
+  attempt moved it up to 29 times a day). No cover orientation configured here, so
+  GHI alone decides; the -south and -north variants set it.
+tags: [covers, solar, ac]
+duration: 5d
+house:
+  rooms:
+    wohnzimmer:
+      # A position-only shutter: RoomMind does not set slat angles, and the venetian
+      # profile keeps its slats open when lowered (40 % of the shading RoomMind assumes).
+      covers: [{entity_id: cover.wohnzimmer_raffstore, profile: roller_shutter}]
+roommind:
+  rooms:
+    wohnzimmer: {covers_auto_enabled: true}
+expect:
+  - {invariant: no_rejected_commands}
+  - {invariant: min_run_respected}
+  - {metric: cover.sunny_days_unshaded, entity_id: cover.wohnzimmer_raffstore, max: 0, label: shades on sunny afternoons although the AC could hold the room}
+  - {metric: cover.max_commands_per_day, entity_id: cover.wohnzimmer_raffstore, max: 6, label: cover moves per day}
+  - {metric: comfort.overshoot_kh, room: wohnzimmer, max: 9, label: cooling keeps the room near its target}
+  # 38.4-38.6 kWh without shading, 24.5-25.8 shading as far as needed (with or without orientation)
+  - {metric: device.electric_kwh, entity_id: climate.wz_ac, max: 32, label: shading saves cooling energy}

@@ -1,0 +1,6 @@
+description: Generic temperature sensor reporting on change.
+noise: 0.03          # K standard deviation
+resolution: 0.1
+offset: 0.0
+report: {min_delta: 0.1, heartbeat_s: 600, min_interval_s: 10}
+time_constant_s: 0  # housing lag behind the air (wall thermostats 13-17 min per datasheet), off by default

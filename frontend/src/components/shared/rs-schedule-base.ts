@@ -4,15 +4,50 @@
  */
 import { LitElement, html, css, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
-import type { HomeAssistant } from "../../types";
+import type { HomeAssistant, RoomConfig } from "../../types";
 import { localize } from "../../utils/localize";
 import { getSelectValue, openEntityInfo } from "../../utils/events";
+import { roomNameOf, usageText, type ScheduleKind } from "../../utils/schedule-usage";
+import "./rs-icon-button";
+import "./rs-field";
+import "./rs-list-row";
 
 export abstract class RsScheduleBase extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property({ type: Number }) public activeIndex = -1;
   @property({ type: String }) public selectorEntity = "";
   @property({ type: Boolean }) public editing = false;
+  /** All rooms and this one, to say where else a helper is used. */
+  @property({ attribute: false }) public rooms: Record<string, RoomConfig> = {};
+  @property({ type: String }) public roomId = "";
+
+  /** Which list of the room this component edits. */
+  protected abstract readonly _kind: ScheduleKind;
+
+  /** "Auch in Küche · Rollläden: Wohnzimmer" for a helper in this room's list, "" if only here. */
+  protected _usage(entityId: string): string {
+    return usageText(
+      this.rooms,
+      entityId,
+      this._kind,
+      roomNameOf(this.rooms, this.hass?.areas),
+      this.hass.language,
+      this.roomId,
+    );
+  }
+
+  /** "Heizplan Bad · Bad" in the add list: where a helper not in this room is used. */
+  protected _optionLabel(entityId: string): string {
+    const name = this._getFriendlyName(entityId);
+    const where = usageText(
+      this.rooms,
+      entityId,
+      this._kind,
+      roomNameOf(this.rooms, this.hass?.areas),
+      this.hass.language,
+    );
+    return where ? `${name} · ${where}` : name;
+  }
 
   /** Shared CSS for schedule rows, status indicators, selector section. */
   static sharedStyles = css`
@@ -39,13 +74,13 @@ export abstract class RsScheduleBase extends LitElement {
     }
 
     .schedule-row.active {
-      background: rgba(76, 175, 80, 0.1);
+      background: color-mix(in srgb, var(--success-color) 10%, transparent);
     }
     .schedule-row.inactive {
-      background: rgba(0, 0, 0, 0.04);
+      background: color-mix(in srgb, var(--secondary-text-color) 5%, transparent);
     }
     .schedule-row.unreachable {
-      background: rgba(0, 0, 0, 0.02);
+      background: color-mix(in srgb, var(--secondary-text-color) 5%, transparent);
       opacity: 0.4;
     }
 
@@ -63,8 +98,8 @@ export abstract class RsScheduleBase extends LitElement {
       flex-shrink: 0;
     }
     .schedule-row.active .schedule-number {
-      background: #4caf50;
-      color: #fff;
+      background: var(--success-color);
+      color: var(--text-primary-color, #fff);
     }
 
     .schedule-status-dot {
@@ -74,8 +109,8 @@ export abstract class RsScheduleBase extends LitElement {
       flex-shrink: 0;
     }
     .schedule-row.active .schedule-status-dot {
-      background: #4caf50;
-      box-shadow: 0 0 6px rgba(76, 175, 80, 0.5);
+      background: var(--success-color);
+      box-shadow: 0 0 6px color-mix(in srgb, var(--success-color) 50%, transparent);
     }
     .schedule-row.inactive .schedule-status-dot {
       background: var(--disabled-text-color, #bdbdbd);
@@ -113,8 +148,9 @@ export abstract class RsScheduleBase extends LitElement {
       font-size: 12px;
       white-space: nowrap;
     }
+    /* green text on the green tint stays under 4.5:1; dot and number carry the colour */
     .schedule-row.active .schedule-status {
-      color: #2e7d32;
+      color: var(--primary-text-color);
     }
     .schedule-row.inactive .schedule-status {
       color: var(--secondary-text-color);
@@ -129,10 +165,6 @@ export abstract class RsScheduleBase extends LitElement {
       gap: 2px;
       flex-shrink: 0;
     }
-    .schedule-controls ha-icon-button {
-      --mdc-icon-button-size: 28px;
-      --mdc-icon-size: 16px;
-    }
 
     .add-schedule-row {
       margin-top: 4px;
@@ -141,32 +173,11 @@ export abstract class RsScheduleBase extends LitElement {
       width: 100%;
     }
 
-    .helper-link {
-      display: inline-block;
-      margin-top: 4px;
-      font-size: 12px;
-      color: var(--primary-color);
-      text-decoration: none;
-    }
-    .helper-link:hover {
-      text-decoration: underline;
-    }
-
     .no-schedules {
       font-size: 13px;
       color: var(--secondary-text-color);
       padding: 12px 0;
       text-align: center;
-    }
-
-    .form-label {
-      display: block;
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--secondary-text-color);
-      margin-bottom: 6px;
-      text-transform: uppercase;
-      letter-spacing: 0.3px;
     }
 
     .selector-section {
@@ -177,7 +188,6 @@ export abstract class RsScheduleBase extends LitElement {
       font-size: 12px;
       color: var(--secondary-text-color);
       margin-top: 4px;
-      padding-left: 4px;
     }
 
     /* .inline-warning is the same pill outside the selector context (#395). */
@@ -189,31 +199,19 @@ export abstract class RsScheduleBase extends LitElement {
       margin-top: 8px;
       padding: 10px 14px;
       border-radius: 8px;
-      background: rgba(255, 152, 0, 0.08);
-      color: var(--warning-color, #ff9800);
+      background: color-mix(in srgb, var(--warning-color) 10%, transparent);
+      color: var(--primary-text-color);
       font-size: 13px;
     }
     .selector-warning ha-icon,
     .inline-warning ha-icon {
       --mdc-icon-size: 18px;
       flex-shrink: 0;
-    }
-
-    .section-hint {
-      font-size: 12px;
-      color: var(--secondary-text-color);
-      line-height: 1.5;
-      margin-bottom: 12px;
+      color: var(--warning-color);
     }
   `;
 
   // SVG paths for icon buttons
-  protected static readonly ICON_CLOSE =
-    "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z";
-  protected static readonly ICON_UP =
-    "M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z";
-  protected static readonly ICON_DOWN =
-    "M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z";
 
   // ─── State computation ───────────────────────────────────────────
 
@@ -255,7 +253,6 @@ export abstract class RsScheduleBase extends LitElement {
     label: string,
     available: string[],
     onAdd: (entityId: string) => void,
-    createLabel: string,
   ): TemplateResult {
     return html`
       <div class="add-schedule-row">
@@ -264,7 +261,7 @@ export abstract class RsScheduleBase extends LitElement {
           .label=${label}
           .options=${available.map((eid) => ({
             value: eid,
-            label: this._getFriendlyName(eid),
+            label: this._optionLabel(eid),
           }))}
           @selected=${(e: Event) => {
             const eid = getSelectValue(e);
@@ -279,12 +276,9 @@ export abstract class RsScheduleBase extends LitElement {
           naturalMenuWidth
         >
           ${available.map(
-            (eid) => html`
-              <ha-list-item value=${eid}>${this._getFriendlyName(eid)}</ha-list-item>
-            `,
+            (eid) => html` <ha-list-item value=${eid}>${this._optionLabel(eid)}</ha-list-item> `,
           )}
         </ha-select>
-        <a href="/config/helpers" target="_top" class="helper-link"> ${createLabel} </a>
       </div>
     `;
   }
@@ -302,35 +296,34 @@ export abstract class RsScheduleBase extends LitElement {
 
     return html`
       <div class="selector-section">
-        <label class="form-label">${selectorLabel}</label>
-        <ha-entity-picker
-          .hass=${this.hass}
-          .value=${this.selectorEntity}
-          .includeDomains=${["input_boolean", "input_number"]}
-          allow-custom-entity
-          @value-changed=${(e: CustomEvent) => {
-            e.stopPropagation();
-            onSelectorChanged(e.detail?.value ?? "");
-          }}
-        ></ha-entity-picker>
+        <rs-field .info=${selectorHint}>
+          <ha-entity-picker
+            .hass=${this.hass}
+            .label=${selectorLabel}
+            .value=${this.selectorEntity}
+            .includeDomains=${["input_boolean", "input_number"]}
+            allow-custom-entity
+            @value-changed=${(e: CustomEvent) => {
+              e.stopPropagation();
+              onSelectorChanged(e.detail?.value ?? "");
+            }}
+          ></ha-entity-picker>
+        </rs-field>
         ${
           this.selectorEntity && selectorState
             ? html`
                 <div class="selector-value">
-                  ${
+                  ${localize(
                     this.selectorEntity.startsWith("input_boolean.")
-                      ? localize("schedule.selector_value_boolean", this.hass.language, {
-                          value: selectorState.state === "on" ? "On" : "Off",
-                        })
-                      : localize("schedule.selector_value_number", this.hass.language, {
-                          value: selectorState.state,
-                        })
-                  }
+                      ? "schedule.selector_value_boolean"
+                      : "schedule.selector_value_number",
+                    this.hass.language,
+                    { value: this.selectorStateText() },
+                  )}
                 </div>
               `
             : nothing
         }
-        <div class="section-hint" style="margin-top:4px">${selectorHint}</div>
         ${
           count > 1 && !this.selectorEntity
             ? html`
@@ -345,39 +338,55 @@ export abstract class RsScheduleBase extends LitElement {
     `;
   }
 
+  /** The selector's state as the user reads it: "An"/"Aus", or the number. */
+  protected selectorStateText(): string {
+    const st = this.selectorEntity ? this.hass?.states?.[this.selectorEntity] : undefined;
+    if (!st) return "";
+    if (this.selectorEntity.startsWith("input_boolean.")) {
+      const l = this.hass.language;
+      if (st.state === "on") return localize("detail.on", l);
+      if (st.state === "off") return localize("detail.off", l);
+    }
+    return this.hass.formatEntityState?.(st) ?? st.state;
+  }
+
   protected _renderScheduleControls(
     index: number,
     count: number,
     onMove: (index: number, dir: -1 | 1) => void,
     onRemove: (index: number) => void,
+    name = "",
   ): TemplateResult {
+    const l = this.hass.language;
     const hasMultiple = count >= 2;
     return html`
       <span class="schedule-controls">
         ${
           hasMultiple && index > 0
-            ? html`
-                <ha-icon-button
-                  .path=${RsScheduleBase.ICON_UP}
-                  @click=${() => onMove(index, -1)}
-                ></ha-icon-button>
-              `
+            ? html`<rs-icon-button
+                size="sm"
+                icon="mdi:arrow-up"
+                .label=${localize("common.move_up_named", l, { name })}
+                @click=${() => onMove(index, -1)}
+              ></rs-icon-button>`
             : nothing
         }
         ${
           hasMultiple && index < count - 1
-            ? html`
-                <ha-icon-button
-                  .path=${RsScheduleBase.ICON_DOWN}
-                  @click=${() => onMove(index, 1)}
-                ></ha-icon-button>
-              `
+            ? html`<rs-icon-button
+                size="sm"
+                icon="mdi:arrow-down"
+                .label=${localize("common.move_down_named", l, { name })}
+                @click=${() => onMove(index, 1)}
+              ></rs-icon-button>`
             : nothing
         }
-        <ha-icon-button
-          .path=${RsScheduleBase.ICON_CLOSE}
+        <rs-icon-button
+          size="sm"
+          icon="mdi:close"
+          .label=${localize("common.remove_named", l, { name })}
           @click=${() => onRemove(index)}
-        ></ha-icon-button>
+        ></rs-icon-button>
       </span>
     `;
   }

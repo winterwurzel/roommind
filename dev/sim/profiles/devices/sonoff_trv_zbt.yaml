@@ -1,0 +1,8 @@
+description: SONOFF TRV-ZBT (gen2) via Zigbee2MQTT, valve numbers named like the device (#482).
+extends: sonoff_trvzb
+# valve_numbers: number.<object_id>_heating_valve_position / _idle_valve_position (0-100 %).
+# Same Zigbee attributes as the TRVZB's opening/closing degree, but the firmware reads the
+# second one as the opening while idle (Z2M: "Valve opening percentage when not heating"),
+# so 100 keeps the valve open in "off". Untouched default here 100/0 (a normal TRV);
+# the real factory default is unknown.
+capabilities: {valve_numbers: true, valve_idle_position: true}

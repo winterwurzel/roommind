@@ -1,0 +1,13 @@
+name: covers-shade-before-cooling-south
+extends: covers-shade-before-cooling
+description: >
+  Same south room with the cover orientation set (180). Orientation decides when the
+  sun is on the window, GHI how strong: the blind closes when the sun reaches the
+  facade, not at sunrise for the midday sun, and only as far as needed.
+tags: [covers, solar, ac]
+roommind:
+  rooms:
+    wohnzimmer:
+      cover_orientations: {cover.wohnzimmer_raffstore: 180}
+expect+:
+  - {metric: cover.earliest_first_move_h, entity_id: cover.wohnzimmer_raffstore, min: 8.5, label: first move once the sun is on the south facade}

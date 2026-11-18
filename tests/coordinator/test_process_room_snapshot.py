@@ -54,14 +54,24 @@ NORMAL_ROOM_KEYS = {
     "active_schedule_index",
     "confidence",
     "mpc_active",
+    "preheat",
+    "setback",
     "presence_away",
+    "occupancy_vacant",
     "force_off",
     "mold_risk_level",
     "mold_surface_rh",
+    "mold_surface_temp",
     "mold_prevention_active",
     "mold_prevention_delta",
+    "target_reason",
+    "mold_boost",
+    "price_shift_heat",
+    "price_shift_cool",
+    "price_level",
     "shading_factor",
     "q_occupancy",
+    "q_residual",
     "n_observations",
     "blind_position",
     "cover_auto_paused",
@@ -72,10 +82,16 @@ NORMAL_ROOM_KEYS = {
     "active_heat_sources",
     "compressor_protection_active",
     "compressor_protection_reason",
+    "compressor_protection_until",
     "coil_dry_active",
     "coil_dry_phase",
     "coil_dry_until",
     "coil_dry_entities",
+    "co2",
+    "voc",
+    "air_quality_bad",
+    "air_quality_reason",
+    "ventilation_active",
 }
 
 OUTDOOR_ROOM_KEYS = {
@@ -101,9 +117,11 @@ OUTDOOR_ROOM_KEYS = {
     "confidence",
     "mpc_active",
     "presence_away",
+    "occupancy_vacant",
     "force_off",
     "mold_risk_level",
     "mold_surface_rh",
+    "mold_surface_temp",
     "mold_prevention_active",
     "mold_prevention_delta",
     "shading_factor",
@@ -113,13 +131,21 @@ OUTDOOR_ROOM_KEYS = {
     "cover_forced_reason",
     "active_cover_schedule_index",
     "q_occupancy",
+    "q_residual",
     "active_heat_sources",
     "compressor_protection_active",
     "compressor_protection_reason",
+    "compressor_protection_until",
+    "setback",
     "coil_dry_active",
     "coil_dry_phase",
     "coil_dry_until",
     "coil_dry_entities",
+    "co2",
+    "voc",
+    "air_quality_bad",
+    "air_quality_reason",
+    "ventilation_active",
 }
 
 
@@ -235,6 +261,39 @@ class TestProcessRoomSnapshot:
         assert result["mode"] == "cooling"
         assert result["cool_target"] == pytest.approx(24.0)
         assert result["device_setpoint"] == pytest.approx(24.0)
+
+    @pytest.mark.asyncio
+    async def test_device_setpoint_shows_direct_offset(self, hass, mock_config_entry):
+        """Direct AC with a setpoint offset: the displayed device setpoint is target + offset (#369)."""
+        room = {
+            **SAMPLE_ROOM,
+            "area_id": "bedroom_offset_xyz",
+            "thermostats": [],
+            "acs": ["climate.bedroom_ac"],
+            "devices": [
+                {
+                    "entity_id": "climate.bedroom_ac",
+                    "type": "ac",
+                    "role": "auto",
+                    "heating_system_type": "",
+                    "setpoint_mode": "direct",
+                    "setpoint_offset": 1.5,
+                    "idle_action": "off",
+                },
+            ],
+            "climate_mode": "cool_only",
+        }
+        coordinator, store = _setup_coordinator(hass, mock_config_entry, {"bedroom_offset_xyz": room})
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(temp="26.0", humidity="55.0"),
+        )
+
+        settings = store.get_settings()
+        result = await coordinator._async_process_room(room, settings, [])
+
+        assert result["mode"] == "cooling"
+        assert result["cool_target"] == pytest.approx(24.0)
+        assert result["device_setpoint"] == pytest.approx(25.5)
 
     @pytest.mark.asyncio
     async def test_window_open(self, hass, mock_config_entry):

@@ -1,0 +1,6 @@
+description: Dual-setpoint thermostat that only offers auto with target_temp_low/high (no separate heat mode).
+extends: generic_heat_cool_hp
+capabilities: {hvac_modes: ["off", "auto"]}
+params:
+  heat_capacity_w: 2500
+  cool_capacity_w: 2500

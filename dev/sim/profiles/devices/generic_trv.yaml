@@ -1,0 +1,29 @@
+description: Thermostatic radiator valve on a hot-water radiator with its own P controller.
+model: trv
+capabilities:
+  hvac_modes: ["off", "heat"]
+  min_temp: 5
+  max_temp: 30
+  target_temp_step: 0.5
+  unit: C
+params:
+  # Sized like an installer would: output at 55 °C supply / 20 °C room = design_factor x the
+  # room's heat load at design_outdoor_c. h_radiator_w_k in a scenario overrides the sizing.
+  design_factor: 1.3
+  design_outdoor_c: -12
+  flow_per_h: 1.5              # water heat flow at fully open valve per W/K of radiator (balanced system)
+  capacity_kj_per_h: 1.75      # water + steel per W/K: warms up in ~12 min, cools in ~30 min
+  supply_temp_c: 55            # design supply at design_outdoor_c, used when no boiler master serves this device
+  heating_curve: true          # weather-compensated supply (GEG §61), straight line down to supply_foot_c at +20 °C
+  supply_foot_c: 25            # radiator curves: slope ~0.9 between 25 °C (+20 °C outdoor) and 55 °C (-12 °C)
+  radiator_exponent: 1.3       # EN 442 output exponent, panel radiators 1.25-1.33
+  radiant_fraction: 0.3        # share of output going to the mass node
+  sensor_bias: 0.04            # TRV head sees air + bias * (radiator - air), ~1 K at a hot radiator
+  p_band_k: 1.0                # valve fully open this far below setpoint
+  # Flow share at a valve position: none up to valve_dead_zone, then the rest rescaled to 0..1
+  # and raised to valve_flow_exponent. 1.0/0.0 = linear (default). < 1 = concave: a real TRV
+  # with low valve authority already passes most of the flow at a small opening.
+  valve_flow_exponent: 1.0
+  valve_dead_zone: 0.0
+  report_interval_s: 60
+quirks: []

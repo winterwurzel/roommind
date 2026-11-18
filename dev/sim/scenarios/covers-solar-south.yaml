@@ -1,0 +1,72 @@
+name: covers-solar-south
+description: >
+  Summer, south-facing living room with an exterior venetian blind under automatic
+  control and a cooling AC. The blind shades on hot sunny afternoons and opens again
+  in the evening; someone working in the room must not trigger shading on its own (#418, #325).
+  RoomMind's own moves never count as manual; real manual moves on day 3 pause the
+  automatic control and the manual night position is kept.
+refs: [418, 325]
+tags: [covers, solar, ac]
+start: 2026-07-06T00:00
+duration: 3d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: hot-summer}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    wohnzimmer:
+      floor_area_m2: 26
+      initial: {temperature: 25.0, mass_temperature: 25.0}
+      windows: [{orientation: S, area_m2: 6, g_value: 0.6}]
+      covers: [{entity_id: cover.wohnzimmer_raffstore, profile: venetian_blind}]
+      # A small unit that cannot hold the room alone on a sunny afternoon, so both the solar
+      # load and the MPC plan (cooling included) ask for shade. covers-shade-before-cooling
+      # has the 3.5 kW unit that holds the room on its own.
+      devices: [{entity_id: climate.wz_ac, profile: generic_split_ac, cool_capacity_w: 1500}]
+      sensors:
+        temperature: {entity_id: sensor.wz_temp}
+        occupancy: {entity_id: binary_sensor.wz_praesenz}
+people:
+  - {id: ben, profile: home_office, rooms: {office: wohnzimmer, living: wohnzimmer}}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    weather_entity: weather.simhome
+    control_mode: mpc
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_ac, type: ac}]
+      temperature_sensor: sensor.wz_temp
+      occupancy_sensors: [binary_sensor.wz_praesenz]
+      climate_mode: cool_only
+      comfort_cool: 24.5   # what the panel writes for cool_only rooms
+      eco_cool: 27.0
+      covers: [cover.wohnzimmer_raffstore]
+      covers_auto_enabled: true
+timeline:
+  # day 3: someone opens the shaded blind for the balcony door, later closes it for the night.
+  # Shading starts between 12:00 and 14:10 depending on the weather seed; at 15:00 it runs on all.
+  - {at: "+2d15h", do: cover.manual, entity_id: cover.wohnzimmer_raffstore, position: 100}
+  - {at: "+2d21h", do: cover.manual, entity_id: cover.wohnzimmer_raffstore, position: 10}
+expect:
+  - {invariant: no_rejected_commands}
+  - {check: "cover('cover.wohnzimmer_raffstore').position < 90", at: "+1d15h", label: shades in the afternoon}
+  # 7-8 moves a day while the afternoon excess fell in 20 % steps every 15 min
+  - {metric: cover.max_commands_per_day_unattended, entity_id: cover.wohnzimmer_raffstore, max: 6, label: cover moves per day}
+  # day 3: one more move to shade again after the manual opening (6-7 on seeds 1-4);
+  # seed 4 reaches 7 on an unattended day too, with and without the AC restart delay
+  - {metric: cover.max_commands_per_day, entity_id: cover.wohnzimmer_raffstore, max: 7, label: cover moves on the day of the manual opening}
+  # RoomMind's own moves, read mid-travel included, are never taken for a user move
+  - {check: "room.wohnzimmer.cover_auto_paused == false", at: "+0d18h35m", label: own deploy step is not a manual move (day 1)}
+  - {check: "room.wohnzimmer.cover_auto_paused == false", at: "+1d06h55m", label: own morning deploy is not a manual move}
+  - {check: "room.wohnzimmer.cover_auto_paused == false", at: "+1d18h37m", label: own deploy step is not a manual move (day 2)}
+  # Evening modulation ending near the baseline must still retract (was stranded at 74 % / 92 %)
+  - {check: "cover('cover.wohnzimmer_raffstore').position > 98", at: "+0d23h", label: open at night (day 1)}
+  - {check: "cover('cover.wohnzimmer_raffstore').position > 98 and room.wohnzimmer.cover_reason != 'user_position_hold'", at: "+1d23h", label: open at night (day 2)}
+  - {check: "cover('cover.wohnzimmer_raffstore').position > 98", at: "+2d20h30m", label: open in the evening (day 3)}
+  # Genuine manual moves are respected
+  - {check: "room.wohnzimmer.cover_auto_paused == true", at: "+2d15h05m", label: manual opening pauses automatic control}
+  - {check: "cover('cover.wohnzimmer_raffstore').position > 90", at: "+2d15h50m", label: manual opening is kept during the pause}
+  - {check: "room.wohnzimmer.cover_auto_paused == true", at: "+2d21h05m", label: manual closing pauses automatic control}
+  - {check: "cover('cover.wohnzimmer_raffstore').position < 20 and room.wohnzimmer.cover_auto_paused == false", at: "+2d23h30m", label: manual night position is kept after the pause}

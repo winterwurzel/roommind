@@ -1,6 +1,7 @@
 {
   "domain": "roommind",
   "name": "RoomMind",
+  "after_dependencies": ["automation", "script"],
   "codeowners": ["@snazzybean"],
   "config_flow": true,
   "dependencies": ["http", "frontend"],
@@ -9,5 +10,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/snazzybean/roommind/issues",
   "requirements": [],
-  "version": "1.7.7"
+  "version": "2.0.0"
 }

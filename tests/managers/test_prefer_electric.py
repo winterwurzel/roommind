@@ -183,9 +183,9 @@ def test_unselected_electric_still_gets_an_idle_command():
 
 
 def test_unselected_electric_gets_idle_command_at_target():
-    """Same, on the delta_t <= 0 early-exit path."""
+    """Same, with the room already at target (the run-continuation path keeps the boiler)."""
     plan = _plan(_electric_room(prefer_electric=False), current_temp=22.0, target_temp=21.0)
-    assert plan.active_sources == "none"
+    assert plan.active_sources == "primary"
     cmd = next(c for c in plan.commands if c.entity_id == ELECTRIC)
     assert cmd.active is False
 

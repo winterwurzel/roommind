@@ -1,0 +1,18 @@
+name: covers-shade-before-cooling-north
+extends: covers-shade-before-cooling
+description: >
+  The window faces north and the cover orientation says so (0). There is no direct
+  solar load on this window, so the blind stays up although the summer sun is strong.
+tags: [covers, solar, ac]
+house:
+  rooms:
+    wohnzimmer:
+      windows: [{orientation: N, area_m2: 6, g_value: 0.6}]
+roommind:
+  rooms:
+    wohnzimmer:
+      cover_orientations: {cover.wohnzimmer_raffstore: 0}
+expect:
+  - {invariant: no_rejected_commands}
+  - {metric: cover.shaded_h, entity_id: cover.wohnzimmer_raffstore, max: 2, label: north window is not shaded against the sun}
+  - {metric: comfort.overshoot_kh, room: wohnzimmer, max: 9, label: cooling keeps the room near its target}

@@ -2,9 +2,40 @@ import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant, RoomConfig, ClimateMode, OverrideType } from "../types";
 import { localize } from "../utils/localize";
-import { inputStyles } from "../styles/input-styles";
-import { tempUnit, toDisplay, toCelsius, tempStep, tempRange } from "../utils/temperature";
+import { errorText } from "../utils/errors";
+import { tokens } from "../styles/tokens";
+import { tempRowStyles } from "../styles/temp-row-styles";
+import { tempRow } from "./shared/temp-row";
+import {
+  NO_OVERRIDE,
+  OVERRIDE_DURATIONS_H,
+  OVERRIDE_PERMANENT_H,
+  QUICK_OVERRIDE_FALLBACK_H,
+  isInvalidBand,
+  liveOverride,
+  overrideBand,
+  overrideSetMessage,
+  type EffectiveOverride,
+} from "../utils/override";
+import { formatClock, scheduleNextChange } from "../utils/room-state";
+import { formatHours } from "../utils/format";
+import { serverNow } from "../utils/server-clock";
+import type { RsSegmentOption } from "./shared/rs-segmented";
+import "./shared/rs-segmented";
 
+type Choice = "schedule" | OverrideType;
+const UNTIL_CHANGE = "next";
+const PERMANENT = "perm";
+/** How long an optimistic state waits for the poll to confirm it. */
+const OPTIMISTIC_TIMEOUT_MS = 15000;
+
+/**
+ * Temporary override of a room: schedule (no override), comfort, eco or a custom band, then
+ * how long. Picking a type only arms it; the duration sends it. Tapping the type of a running
+ * override arms it again (new duration), tapping the armed type again puts it away. Shows the user's choice at
+ * once (optimistic) and fires `override-state` with the effective override whenever that
+ * changes, so the hero can show it before the poll confirms.
+ */
 @customElement("rs-override-section")
 export class RsOverrideSection extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
@@ -15,399 +46,261 @@ export class RsOverrideSection extends LitElement {
   @property({ type: Number }) public ecoHeat = 17.0;
   @property({ type: Number }) public ecoCool = 27.0;
   @property() public language = "en";
+  /** Climate control is off for this room: RoomMind sends nothing, an override would not act. */
+  @property({ type: Boolean }) public disabled = false;
 
   @state() private _overridePending: OverrideType | null = null;
   @state() private _overrideCustomHeat = 21;
   @state() private _overrideCustomCool = 24;
   @state() private _overrideError = "";
-  @state() private _optimisticOverride: {
-    type: OverrideType;
-    heat: number | null;
-    cool: number | null;
-    until: number | null;
-  } | null = null;
+  @state() private _optimisticOverride: Omit<EffectiveOverride, "active"> | null = null;
   @state() private _optimisticClear = false;
+  private _optimisticSince = 0;
+  private _lastFired = "";
 
   static styles = [
-    inputStyles,
+    tokens,
+    tempRowStyles,
     css`
       :host {
         display: block;
       }
 
-      .override-divider {
-        border: none;
-        border-top: 1px solid var(--divider-color, #e0e0e0);
-        margin: 16px 0 12px;
-      }
-
-      .override-label {
-        font-size: 13px;
-        font-weight: 500;
+      .qlabel {
+        font-size: var(--rs-font-sm);
         color: var(--secondary-text-color);
-        margin-bottom: 10px;
+        margin: var(--rs-space-4) 0 6px;
       }
 
-      .override-presets {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
+      .qlabel:first-child {
+        margin-top: 0;
       }
 
-      .override-preset {
-        cursor: pointer;
-        border: 1px solid var(--divider-color, #e0e0e0);
-        border-radius: 8px;
-        padding: 6px 12px;
-        font-size: 13px;
-        background: transparent;
-        color: var(--primary-text-color);
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        transition:
-          background 0.15s,
-          border-color 0.15s;
+      .custom {
+        margin-top: var(--rs-space-1);
       }
 
-      .override-preset:hover {
-        background: rgba(0, 0, 0, 0.04);
-      }
-
-      .override-preset.pending {
-        border-color: var(--primary-color);
-        background: rgba(var(--rgb-primary-color, 33, 150, 243), 0.08);
-      }
-
-      .override-preset.active.boost {
-        border-color: var(--warning-color, #ff9800);
-        background: rgba(255, 152, 0, 0.15);
-        color: var(--warning-color, #ff9800);
-      }
-
-      .override-preset.active.eco {
-        border-color: #4caf50;
-        background: rgba(76, 175, 80, 0.15);
-        color: #4caf50;
-      }
-
-      .override-preset.active.custom {
-        border-color: #2196f3;
-        background: rgba(33, 150, 243, 0.15);
-        color: #2196f3;
-      }
-
-      .override-preset:disabled {
-        opacity: 0.35;
-        cursor: default;
-      }
-
-      .override-preset:disabled:hover {
-        background: transparent;
-      }
-
-      .override-preset ha-icon {
-        --mdc-icon-size: 16px;
-      }
-
-      .override-target {
-        display: block;
-        width: 160px;
-        margin-top: 12px;
-      }
-
-      .override-duration {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin-top: 12px;
-        align-items: center;
-      }
-
-      .override-duration-label {
-        font-size: 13px;
-        font-weight: 500;
+      .note {
+        margin-top: var(--rs-space-2);
+        font-size: var(--rs-font-sm);
         color: var(--secondary-text-color);
       }
 
-      .override-dur-chips {
-        display: flex;
-        gap: 6px;
-      }
-
-      .override-dur-chip {
-        cursor: pointer;
-        border: 1px solid var(--divider-color);
-        border-radius: 8px;
-        padding: 6px 14px;
-        font-size: 13px;
-        font-weight: 500;
-        background: var(--card-background-color);
-        color: var(--primary-text-color);
-        transition:
-          border-color 0.15s ease,
-          background 0.15s ease;
-      }
-
-      .override-dur-chip:hover {
-        background: rgba(255, 255, 255, 0.04);
-        border-color: rgba(3, 169, 244, 0.4);
-      }
-
-      .override-dur-chip:disabled {
-        opacity: 0.5;
-        pointer-events: none;
-      }
-
-      .override-error {
-        color: var(--error-color, #d32f2f);
-        font-size: 12px;
-        margin-top: 6px;
+      .error {
+        color: var(--rs-err-text);
+        font-size: var(--rs-font-sm);
+        margin-top: var(--rs-space-2);
       }
     `,
   ];
 
   updated(changedProps: Map<string, unknown>) {
-    // Clear optimistic override state once server data catches up
+    // Clear optimistic state once server data catches up (or never will).
     if (changedProps.has("config") && this.config?.live) {
       const live = this.config.live;
-      if (this._optimisticOverride && live.override_active) {
+      const expired = Date.now() - this._optimisticSince > OPTIMISTIC_TIMEOUT_MS;
+      if (
+        this._optimisticOverride &&
+        ((live.override_active && live.override_type === this._optimisticOverride.type) || expired)
+      ) {
         this._optimisticOverride = null;
       }
-      if (this._optimisticClear && !live.override_active) {
+      if (this._optimisticClear && (!live.override_active || expired)) {
         this._optimisticClear = false;
       }
     }
+    const effective = this.getEffectiveOverride();
+    const key = JSON.stringify(effective);
+    if (key !== this._lastFired) {
+      this._lastFired = key;
+      this.dispatchEvent(
+        new CustomEvent<EffectiveOverride>("override-state", {
+          detail: effective,
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    }
   }
 
-  /** Compute effective override state from optimistic + server data. */
-  getEffectiveOverride(): {
-    active: boolean;
-    type: OverrideType | null;
-    heat: number | null;
-    cool: number | null;
-    until: number | null;
-  } {
-    if (this._optimisticClear) {
-      return { active: false, type: null, heat: null, cool: null, until: null };
-    }
-    if (this._optimisticOverride) {
-      return {
-        active: true,
-        type: this._optimisticOverride.type,
-        heat: this._optimisticOverride.heat,
-        cool: this._optimisticOverride.cool,
-        until: this._optimisticOverride.until,
-      };
-    }
-    const live = this.config?.live;
-    if (live?.override_active && live.override_type) {
-      return {
-        active: true,
-        type: live.override_type,
-        heat: live.override_heat,
-        cool: live.override_cool,
-        until: live.override_until,
-      };
-    }
-    return { active: false, type: null, heat: null, cool: null, until: null };
+  /** Effective override state: optimistic clear > optimistic set > server data. */
+  getEffectiveOverride(): EffectiveOverride {
+    if (this._optimisticClear) return NO_OVERRIDE;
+    if (this._optimisticOverride) return { active: true, ...this._optimisticOverride };
+    return liveOverride(this.config?.live);
   }
 
   render() {
+    const l = this.language;
     const ov = this.getEffectiveOverride();
+    const value: Choice = this._overridePending ?? (ov.active && ov.type ? ov.type : "schedule");
+    const hasSchedule = (this.config?.schedules ?? []).some((s) => !!s.entity_id);
+    const disabled = this.disabled && !this._overridePending;
+    // With control off a running override must still be endable: "schedule" stays usable
+    const locked = (v: string) => disabled && (v !== "schedule" || !ov.active);
+    const options: RsSegmentOption[] = [
+      {
+        value: "schedule",
+        label: localize(hasSchedule ? "card.quick.schedule" : "card.quick.normal", l),
+        icon: hasSchedule ? "mdi:calendar-clock" : "mdi:home-thermometer-outline",
+      },
+      { value: "boost", label: localize("override.comfort", l), icon: "mdi:sofa" },
+      { value: "eco", label: localize("override.eco", l), icon: "mdi:leaf" },
+      { value: "custom", label: localize("override.custom", l), icon: "mdi:thermometer" },
+    ].map((o) => ({ ...o, disabled: locked(o.value) }));
 
     return html`
-      <hr class="override-divider" />
-      <div class="override-label">${localize("override.label", this.language)}</div>
-      ${this._renderOverrideButtons(ov)}
-      ${
-        this._overrideError
-          ? html`<div class="override-error">${this._overrideError}</div>`
-          : nothing
-      }
+      <div class="qlabel">${localize("detail.override.label", l)}</div>
+      <rs-segmented
+        reselect
+        .label=${localize("detail.override.label", l)}
+        .options=${options}
+        .value=${value}
+        @value-changed=${this._onChoice}
+      ></rs-segmented>
+      ${disabled ? html`<div class="note">${localize("detail.override.control_off", l)}</div>` : nothing}
+      ${this._overridePending ? this._renderPending(this._overridePending) : nothing}
+      <div class="error" role="alert">${this._overrideError}</div>
     `;
   }
 
-  private _renderOverrideButtons(ov: ReturnType<typeof this.getEffectiveOverride>) {
-    const activeType = ov.active ? ov.type : null;
-    const showDuration = !activeType && this._overridePending;
-
+  private _renderPending(type: OverrideType) {
+    const l = this.language;
+    const options: RsSegmentOption[] = OVERRIDE_DURATIONS_H.map((h) => ({
+      value: String(h),
+      label: formatHours(h, l),
+    }));
+    const next = this._nextChange();
+    if (next != null) {
+      options.push({
+        value: UNTIL_CHANGE,
+        label: localize("detail.override.until_change", l, { time: formatClock(next, l) }),
+      });
+    }
+    options.push({ value: PERMANENT, label: localize("hero.permanent", l) });
     return html`
-      <div class="override-presets">
-        ${(["boost", "eco", "custom"] as OverrideType[]).map((t) => {
-          const isActive = activeType === t;
-          const isDisabled = activeType !== null && !isActive;
-          const isPending = !activeType && this._overridePending === t;
-
-          return html`
-            <button
-              class="override-preset ${t} ${isActive ? "active" : ""} ${isPending ? "pending" : ""}"
-              ?disabled=${isDisabled}
-              @click=${() => (isActive ? this._onClearOverride() : this._onOverridePreset(t))}
-            >
-              <ha-icon
-                icon=${t === "boost" ? "mdi:fire" : t === "eco" ? "mdi:leaf" : "mdi:thermometer"}
-              ></ha-icon>
-              ${
-                t === "boost"
-                  ? localize("override.comfort", this.language)
-                  : t === "eco"
-                    ? localize("override.eco", this.language)
-                    : localize("override.custom", this.language)
-              }
-            </button>
-          `;
-        })}
-      </div>
-      ${
-        showDuration
-          ? html`
-              ${this._overridePending === "custom" ? this._renderCustomInputs() : nothing}
-              <div class="override-duration">
-                <span class="override-duration-label"
-                  >${localize("override.activate_for", this.language)}</span
-                >
-                <div class="override-dur-chips">
-                  ${[
-                    { label: "1h", hours: 1 },
-                    { label: "2h", hours: 2 },
-                    { label: "4h", hours: 4 },
-                  ].map(
-                    (opt) => html`
-                      <button
-                        class="override-dur-chip"
-                        @click=${() => this._onOverrideActivate(opt.hours)}
-                      >
-                        ${opt.label}
-                      </button>
-                    `,
-                  )}
-                </div>
-              </div>
-            `
-          : nothing
-      }
+      ${type === "custom" ? this._renderCustomInputs() : nothing}
+      <div class="qlabel">${localize("detail.override.duration", l)}</div>
+      <rs-segmented
+        size="sm"
+        wrap
+        .label=${localize("detail.override.duration", l)}
+        .options=${options}
+        .value=${null}
+        @value-changed=${this._onDuration}
+      ></rs-segmented>
     `;
   }
 
   private _renderCustomInputs() {
-    const range = tempRange(5, 35, this.hass);
-    const heatField = html`
-      <ha-textfield
-        class="override-target"
-        type="number"
-        .label=${localize(
-          this.climateMode === "auto" ? "override.heat_to" : "override.target",
-          this.language,
-        )}
-        .suffix=${tempUnit(this.hass)}
-        min=${range.min}
-        max=${range.max}
-        step=${tempStep(this.hass)}
-        .value=${String(toDisplay(this._overrideCustomHeat, this.hass))}
-        @input=${this._onCustomHeatInput}
-      ></ha-textfield>
-    `;
-    const coolField = html`
-      <ha-textfield
-        class="override-target"
-        type="number"
-        .label=${localize(
-          this.climateMode === "auto" ? "override.cool_above" : "override.target",
-          this.language,
-        )}
-        .suffix=${tempUnit(this.hass)}
-        min=${range.min}
-        max=${range.max}
-        step=${tempStep(this.hass)}
-        .value=${String(toDisplay(this._overrideCustomCool, this.hass))}
-        @input=${this._onCustomCoolInput}
-      ></ha-textfield>
-    `;
-    if (this.climateMode === "heat_only") return heatField;
-    if (this.climateMode === "cool_only") return coolField;
-    return html`${heatField} ${coolField}`;
+    const row = (
+      labelKey: "override.heat_to" | "override.cool_above" | "override.target",
+      heat: boolean,
+    ) =>
+      tempRow({
+        hass: this.hass,
+        side: heat ? "heat" : "cool",
+        label: localize(labelKey, this.language),
+        celsius: heat ? this._overrideCustomHeat : this._overrideCustomCool,
+        onChange: (c) => {
+          if (heat) this._overrideCustomHeat = c;
+          else this._overrideCustomCool = c;
+        },
+      });
+    if (this.climateMode === "heat_only")
+      return html`<div class="custom">${row("override.target", true)}</div>`;
+    if (this.climateMode === "cool_only")
+      return html`<div class="custom">${row("override.target", false)}</div>`;
+    return html`<div class="custom">
+      ${row("override.heat_to", true)} ${row("override.cool_above", false)}
+    </div>`;
   }
 
-  private _onOverridePreset(type: OverrideType): void {
-    if (this._overridePending === type) {
-      this._overridePending = null;
-    } else {
-      this._overridePending = type;
-      if (type === "custom") {
-        this._overrideCustomHeat = this.comfortHeat;
-        this._overrideCustomCool = this.comfortCool;
-      }
-    }
+  /** Next change of the active schedule, if the room has one and it lies ahead. */
+  private _nextChange(): number | null {
+    const next = scheduleNextChange(this.config, this.hass?.states);
+    return next != null && next > serverNow() / 1000 ? next : null;
+  }
+
+  private _onChoice(e: CustomEvent<{ value: Choice }>): void {
+    e.stopPropagation();
+    const choice = e.detail.value;
     this._overrideError = "";
+    // A second tap on the armed type puts it away again
+    if (choice !== "schedule" && choice === this._overridePending) {
+      this._overridePending = null;
+      return;
+    }
+    if (choice === "schedule") {
+      this._overridePending = null;
+      if (this.getEffectiveOverride().active) this._onClearOverride();
+      return;
+    }
+    this._overridePending = choice;
+    if (choice === "custom") {
+      const ov = this.getEffectiveOverride();
+      this._overrideCustomHeat =
+        ov.type === "custom" && ov.heat != null ? ov.heat : this.comfortHeat;
+      this._overrideCustomCool =
+        ov.type === "custom" && ov.cool != null ? ov.cool : this.comfortCool;
+    }
   }
 
-  private _onCustomHeatInput(e: Event): void {
-    this._overrideCustomHeat = toCelsius(
-      Number((e.target as HTMLInputElement).value) || toDisplay(21, this.hass),
-      this.hass,
-    );
+  private _onDuration(e: CustomEvent<{ value: string }>): void {
+    e.stopPropagation();
+    const v = e.detail.value;
+    if (v === UNTIL_CHANGE) this._onOverrideActivate(QUICK_OVERRIDE_FALLBACK_H, true);
+    else if (v === PERMANENT) this._onOverrideActivate(OVERRIDE_PERMANENT_H);
+    else this._onOverrideActivate(Number(v));
   }
 
-  private _onCustomCoolInput(e: Event): void {
-    this._overrideCustomCool = toCelsius(
-      Number((e.target as HTMLInputElement).value) || toDisplay(24, this.hass),
-      this.hass,
-    );
-  }
-
-  private async _onOverrideActivate(hours: number): Promise<void> {
+  private async _onOverrideActivate(hours: number, untilScheduleChange = false): Promise<void> {
     if (!this._overridePending || !this.config) return;
 
     const pendingType = this._overridePending;
-    let heat: number | null;
-    let cool: number | null;
-    if (pendingType === "boost") {
-      heat = this.comfortHeat;
-      cool = this.comfortCool;
-    } else if (pendingType === "eco") {
-      heat = this.ecoHeat;
-      cool = this.ecoCool;
-    } else {
-      heat = this._overrideCustomHeat;
-      cool = this._overrideCustomCool;
-    }
-    if (this.climateMode === "heat_only") cool = null;
-    if (this.climateMode === "cool_only") heat = null;
-
-    if (heat != null && cool != null && cool < heat) {
+    const custom = { heat: this._overrideCustomHeat, cool: this._overrideCustomCool };
+    const { heat, cool } = overrideBand(
+      pendingType,
+      this.climateMode,
+      {
+        comfortHeat: this.comfortHeat,
+        comfortCool: this.comfortCool,
+        ecoHeat: this.ecoHeat,
+        ecoCool: this.ecoCool,
+      },
+      custom,
+    );
+    if (isInvalidBand(heat, cool)) {
       this._overrideError = localize("override.invalid_band", this.language);
       return;
     }
-
-    this._optimisticOverride = {
-      type: pendingType,
-      heat,
-      cool,
-      until: Date.now() / 1000 + hours * 3600,
-    };
+    const nowS = serverNow() / 1000;
+    const next = untilScheduleChange ? this._nextChange() : null;
+    const until = next ?? (hours > 0 ? nowS + hours * 3600 : null);
+    const previous = this._optimisticOverride;
+    this._optimisticOverride = { type: pendingType, heat, cool, until };
+    this._optimisticSince = Date.now();
     this._optimisticClear = false;
     this._overridePending = null;
     this._overrideError = "";
-
-    const msg: Record<string, unknown> = {
-      type: "roommind/override/set",
-      area_id: this.config.area_id,
-      override_type: pendingType,
-      duration: hours,
-    };
-    if (pendingType === "custom") {
-      if (this.climateMode !== "cool_only") msg.heat = this._overrideCustomHeat;
-      if (this.climateMode !== "heat_only") msg.cool = this._overrideCustomCool;
-    }
-
+    const msg = overrideSetMessage(
+      this.config.area_id,
+      pendingType,
+      hours,
+      this.climateMode,
+      custom,
+      untilScheduleChange,
+    );
     try {
       await this.hass.callWS(msg);
       this._fireRoomUpdated();
     } catch (err) {
-      this._optimisticOverride = null;
-      this._overrideError =
-        err instanceof Error ? err.message : localize("override.error_set", this.language);
+      this._optimisticOverride = previous;
+      this._overrideError = errorText(
+        err,
+        localize("override.error_set", this.language),
+        this.language,
+      );
       // eslint-disable-next-line no-console
       console.error("Override set failed:", err);
     }
@@ -417,6 +310,7 @@ export class RsOverrideSection extends LitElement {
     if (!this.config) return;
 
     this._optimisticClear = true;
+    this._optimisticSince = Date.now();
     this._optimisticOverride = null;
     this._overrideError = "";
 
@@ -428,8 +322,11 @@ export class RsOverrideSection extends LitElement {
       this._fireRoomUpdated();
     } catch (err) {
       this._optimisticClear = false;
-      this._overrideError =
-        err instanceof Error ? err.message : localize("override.error_clear", this.language);
+      this._overrideError = errorText(
+        err,
+        localize("override.error_clear", this.language),
+        this.language,
+      );
       // eslint-disable-next-line no-console
       console.error("Override clear failed:", err);
     }

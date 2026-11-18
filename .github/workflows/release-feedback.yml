@@ -1,0 +1,74 @@
+name: Release Feedback
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose notes are scanned
+        required: true
+      dry_run:
+        description: Only log what would be posted
+        type: boolean
+        default: true
+
+jobs:
+  request-feedback:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Ask reporters of fixed issues to test
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const dryRun = context.eventName === 'workflow_dispatch' && String(context.payload.inputs.dry_run) !== 'false';
+            const release = context.eventName === 'release'
+              ? context.payload.release
+              : (await github.rest.repos.getReleaseByTag({ owner, repo, tag: context.payload.inputs.tag })).data;
+
+            // Only full issue links; discussion and PR links have no reporter waiting on a fix.
+            const pattern = new RegExp(`github\\.com/${owner}/${repo}/issues/(\\d+)`, 'g');
+            const numbers = [...new Set([...(release.body || '').matchAll(pattern)].map(m => Number(m[1])))];
+            core.info(`${release.tag_name}: issues referenced ${numbers.join(', ') || 'none'}`);
+
+            const base = release.tag_name.replace(/-(alpha|beta|rc)\b.*$/, '');
+            const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const cycleLink = new RegExp(`releases/tag/${escaped}(?:-(?:alpha|beta|rc)[0-9A-Za-z.]*)?(?![0-9A-Za-z.])`);
+
+            for (const number of numbers) {
+              const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: number });
+              const labels = issue.labels.map(l => l.name);
+              if (issue.pull_request || issue.state !== 'open') {
+                core.info(`#${number}: skipped (${issue.pull_request ? 'pull request' : 'closed'})`);
+                continue;
+              }
+              // Set by an earlier release of the same fix (beta before final).
+              if (labels.includes('fix-released')) {
+                core.info(`#${number}: skipped (already notified)`);
+                continue;
+              }
+              // A reply drops fix-released; a beta of this version already asked, the final must not
+              // ask again and take needs-attention away from a "still broken" answer.
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number });
+              if (comments.some(c => cycleLink.test(c.body || ''))) {
+                core.info(`#${number}: skipped (notified for ${base} already)`);
+                continue;
+              }
+              const body = `[${release.tag_name}](${release.html_url}) includes a fix for this. Please update and let me know if it works for you.`;
+              if (dryRun) {
+                core.info(`#${number}: would comment "${body}"`);
+                continue;
+              }
+              await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: ['waiting for feedback', 'fix-released'] });
+              for (const name of ['stale', 'needs-attention']) {
+                if (labels.includes(name)) {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name });
+                }
+              }
+              core.info(`#${number}: commented and labeled`);
+            }

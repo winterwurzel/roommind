@@ -1,0 +1,20 @@
+name: ufh-proportional
+extends: ufh-slow-response
+description: >
+  The underfloor room of ufh-slow-response with a proportional thermostat. Underfloor
+  heating has no start hysteresis in the controller (its pre-heating decisions are the
+  optimizer's), so without a price on starts MPC switched it heat/idle every 30 s cycle
+  while the room sat a few hundredths below its target (#429).
+refs: [429, 131]
+tags: [ufh, mpc]
+roommind:
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wohnzimmer_fbh, type: trv, heating_system_type: underfloor, setpoint_mode: proportional}]
+expect:
+  - {metric: comfort.undershoot_kh, room: wohnzimmer, max: 10}
+  - {metric: comfort.heat_overshoot_kh, room: wohnzimmer, max: 15}
+  - {metric: device.shortest_run_min, entity_id: climate.wohnzimmer_fbh, min: 15, label: no heat/idle toggling at the target (0.5 min runs before)}
+  - {metric: device.device_starts, entity_id: climate.wohnzimmer_fbh, max: 22, label: fewer slab starts (27 before)}
+  - {metric: room.temp_max, room: wohnzimmer, max: 23.5}
+  - {invariant: target_never_empty}

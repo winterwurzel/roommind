@@ -1,0 +1,53 @@
+name: preheat-room-switch-off
+description: >
+  Bedroom with a radiator sized just to its heat load, eco 16 °C at night and comfort 22 °C
+  from 08:00, pre-heating switched off for the room. With pre-heating on, this room heats
+  through the eco night from 22:00; switched off it must stay idle until shortly before the
+  block (#478).
+refs: [478]
+tags: [trv, mpc, preheat]
+start: 2026-01-12T00:00
+duration: 3d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    schlafzimmer:
+      name: Schlafzimmer
+      floor_area_m2: 16
+      exterior_wall_m2: 11
+      initial: {temperature: 20.0}
+      windows: [{orientation: N, area_m2: 1.8}]
+      devices:
+        - {entity_id: climate.schlafzimmer_trv, profile: generic_trv, design_factor: 1.0}
+        - {entity_id: climate.heizung_kessel, profile: generic_boiler}
+      sensors:
+        temperature: {entity_id: sensor.schlafzimmer_temp}
+helpers:
+  schedule:
+    plan: {weekdays: ["08:00-22:00"], weekend: ["08:00-22:00"]}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    weather_entity: weather.simhome
+    control_mode: mpc
+    compressor_groups:
+      - {id: kessel, name: Kessel, members: [climate.schlafzimmer_trv], master_entity: climate.heizung_kessel, min_run_minutes: 5, min_off_minutes: 5}
+  rooms:
+    schlafzimmer:
+      devices: [{entity_id: climate.schlafzimmer_trv, type: trv, heating_system_type: radiator}]
+      temperature_sensor: sensor.schlafzimmer_temp
+      climate_mode: heat_only
+      schedules: [{entity_id: schedule.plan}]
+      comfort_temp: 22.0
+      eco_temp: 16.0
+      preheat_enabled: false
+expect:
+  - {invariant: no_rejected_commands}
+  # heating near eco 16 is holding eco, not pre-heating
+  - {check: "room.schlafzimmer.commanded_mode != 'heating' or room.schlafzimmer.current_temp < 16.2", at: "+1d23h00m", label: no pre-heat right after the evening block}
+  - {check: "room.schlafzimmer.commanded_mode != 'heating' or room.schlafzimmer.current_temp < 16.2", at: "+2d02h00m", label: no pre-heat in the night}
+  - {check: "room.schlafzimmer.commanded_mode != 'heating' or room.schlafzimmer.current_temp < 16.2", at: "+2d06h00m", label: no pre-heat two hours before the block}
+  - {check: "room.schlafzimmer.commanded_mode == 'heating'", at: "+2d08h30m", label: heats once the block has started}

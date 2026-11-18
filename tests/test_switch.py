@@ -12,6 +12,7 @@ from custom_components.roommind.switch import (
     RoomMindBoilerHeatingSwitch,
     RoomMindClimateControlSwitch,
     RoomMindCoverAutoSwitch,
+    RoomMindGlobalClimateControlSwitch,
     RoomMindPreferElectricSwitch,
     RoomMindVacationSwitch,
     _create_room_switches,
@@ -125,10 +126,12 @@ async def test_async_setup_entry_creates_entities_for_rooms_with_covers():
     assert coordinator.async_add_switch_entities is async_add_entities
     async_add_entities.assert_called_once()
     entities = async_add_entities.call_args[0][0]
-    # 1 vacation + 1 boiler heating + 2 climate control + 2 prefer electric + 1 cover auto
-    assert len(entities) == 7
+    # 1 vacation + 1 global climate control + 1 boiler heating
+    # + 2 climate control + 2 prefer electric + 1 cover auto
+    assert len(entities) == 8
     assert isinstance(entities[0], RoomMindVacationSwitch)
-    assert isinstance(entities[1], RoomMindBoilerHeatingSwitch)
+    assert isinstance(entities[1], RoomMindGlobalClimateControlSwitch)
+    assert isinstance(entities[2], RoomMindBoilerHeatingSwitch)
     climate_switches = [e for e in entities if isinstance(e, RoomMindClimateControlSwitch)]
     cover_switches = [e for e in entities if isinstance(e, RoomMindCoverAutoSwitch)]
     prefer_electric_switches = [e for e in entities if isinstance(e, RoomMindPreferElectricSwitch)]
@@ -163,12 +166,13 @@ async def test_async_setup_entry_no_covers_still_creates_vacation_switch():
 
     async_add_entities.assert_called_once()
     entities = async_add_entities.call_args[0][0]
-    # 1 vacation + 1 boiler heating + 1 climate control + 1 prefer electric
-    assert len(entities) == 4
+    # 1 vacation + 1 global climate control + 1 boiler heating + 1 climate control + 1 prefer electric
+    assert len(entities) == 5
     assert isinstance(entities[0], RoomMindVacationSwitch)
-    assert isinstance(entities[1], RoomMindBoilerHeatingSwitch)
-    assert isinstance(entities[2], RoomMindClimateControlSwitch)
-    assert isinstance(entities[3], RoomMindPreferElectricSwitch)
+    assert isinstance(entities[1], RoomMindGlobalClimateControlSwitch)
+    assert isinstance(entities[2], RoomMindBoilerHeatingSwitch)
+    assert isinstance(entities[3], RoomMindClimateControlSwitch)
+    assert isinstance(entities[4], RoomMindPreferElectricSwitch)
 
 
 @pytest.fixture
@@ -366,3 +370,32 @@ async def test_boiler_heating_switch_turn_off_and_on(mock_vacation_coordinator):
     await switch.async_turn_on()
     store.async_save_settings.assert_awaited_with({"boiler_heating_enabled": True})
     assert coordinator.async_request_refresh.await_count == 2
+
+
+def test_global_climate_control_switch_ids(mock_vacation_coordinator):
+    coordinator, _ = mock_vacation_coordinator
+    switch = RoomMindGlobalClimateControlSwitch(coordinator)
+    assert switch.unique_id == "roommind_climate_control"
+    assert switch.entity_id == "switch.roommind_climate_control"
+    assert switch.name == "RoomMind Climate Control"
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [({}, True), ({"climate_control_active": True}, True), ({"climate_control_active": False}, False)],
+)
+def test_global_climate_control_switch_follows_the_setting(mock_vacation_coordinator, settings, expected):
+    coordinator, store = mock_vacation_coordinator
+    store.get_settings.return_value = settings
+    assert RoomMindGlobalClimateControlSwitch(coordinator).is_on is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("turn_on", "value"), [(True, True), (False, False)])
+async def test_global_climate_control_switch_saves_the_setting(mock_vacation_coordinator, turn_on, value):
+    coordinator, store = mock_vacation_coordinator
+    store.async_save_settings = AsyncMock()
+    switch = RoomMindGlobalClimateControlSwitch(coordinator)
+    await (switch.async_turn_on() if turn_on else switch.async_turn_off())
+    store.async_save_settings.assert_awaited_once_with({"climate_control_active": value})
+    coordinator.async_request_refresh.assert_awaited_once()

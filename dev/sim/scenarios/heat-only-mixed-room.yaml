@@ -1,0 +1,33 @@
+name: heat-only-mixed-room
+extends: heat-source-orchestration
+description: >
+  Heat only in a room with a radiator and a heat-pump split AC, without orchestration:
+  the radiator heats alone and the AC stays off (#476). An office with only a split AC in
+  heat only keeps heating with it.
+refs: [476]
+tags: [trv, ac, climate_mode]
+house:
+  rooms:
+    buero:
+      floor_area_m2: 12
+      initial: {temperature: 18.5}
+      devices: [{entity_id: climate.buero_split, profile: generic_split_ac}]
+      sensors: {temperature: {entity_id: sensor.buero_temp}}
+roommind:
+  rooms:
+    wohnzimmer:
+      heat_source_orchestration: false
+    buero:
+      devices: [{entity_id: climate.buero_split, type: ac}]
+      temperature_sensor: sensor.buero_temp
+      climate_mode: heat_only
+      schedules: [{entity_id: schedule.tag}]
+      comfort_temp: 21.0
+      eco_temp: 18.0
+expect:
+  - {invariant: target_never_empty}
+  - {invariant: no_rejected_commands}
+  - {metric: device.active_h, entity_id: climate.wz_split, max: 0, label: the AC of the radiator room never runs}
+  - {metric: device.active_h, entity_id: climate.wz_trv, min: 10, label: the radiator heats the room}
+  - {metric: device.active_h, entity_id: climate.buero_split, min: 5, label: the AC-only room still heats with its AC}
+  - {metric: comfort.in_band_pct, room: wohnzimmer, min: 80, label: "radiator alone, same as the room without the AC configured (83.9 %)"}

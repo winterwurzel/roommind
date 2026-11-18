@@ -3,7 +3,7 @@
  * Mirrors backend logic from custom_components/roommind/utils/device_utils.py.
  */
 
-import type { DeviceConfig } from "../types";
+import type { ClimateMode, DeviceConfig, HassEntity, HomeAssistant } from "../types";
 
 const HST_PRIORITY: Record<string, number> = { underfloor: 2, radiator: 1, "": 0 };
 
@@ -20,4 +20,59 @@ export function resolveHeatingSystemType(devices: DeviceConfig[]): string {
     if ((HST_PRIORITY[hst] ?? 0) > (HST_PRIORITY[best] ?? 0)) best = hst;
   }
   return best;
+}
+
+const ACTIVE_HVAC_MODES = ["heat", "cool", "heat_cool", "auto"];
+
+export interface DeviceAbilities {
+  heat: boolean;
+  cool: boolean;
+  /** Thermostats and climate devices in the same room. */
+  mixed: boolean;
+}
+
+/** What the room's devices can do; a device without known or usable hvac_modes counts as able. */
+export function deviceAbilities(
+  devices: DeviceConfig[],
+  hass: Pick<HomeAssistant, "states">,
+): DeviceAbilities {
+  const can = (eid: string, wanted: string[]) => {
+    const m = hass.states[eid]?.attributes?.hvac_modes;
+    if (!Array.isArray(m)) return true;
+    const modes = m as string[];
+    // Like the backend (has_reliable_hvac_modes, #100): a list without any active mode hides what the device can do.
+    if (!modes.some((x) => ACTIVE_HVAC_MODES.includes(x))) return true;
+    return modes.some((x) => wanted.includes(x));
+  };
+  const trvs = devices.filter((d) => d.type === "trv");
+  const acs = devices.filter((d) => d.type === "ac");
+  return {
+    heat: trvs.length > 0 || acs.some((d) => can(d.entity_id, ["heat", "heat_cool", "auto"])),
+    cool: acs.some((d) => can(d.entity_id, ["cool", "heat_cool", "auto"])),
+    mixed: trvs.length > 0 && acs.length > 0,
+  };
+}
+
+/** Whether the devices can run a climate mode; a room without devices fits every mode. */
+export function modeFits(
+  mode: ClimateMode,
+  devices: DeviceConfig[],
+  ability: DeviceAbilities,
+): boolean {
+  if (devices.length === 0 || mode === "auto") return true;
+  return mode === "heat_only" ? ability.heat : ability.cool;
+}
+
+export interface FanModeOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * A fan speed as Home Assistant names it ("low" → "Niedrig"). Without a device the climate
+ * domain's names apply; speeds Home Assistant does not know stay as the device reports them.
+ */
+export function fanModeLabel(hass: HomeAssistant, mode: string, stateObj?: HassEntity): string {
+  const st = stateObj ?? { entity_id: "climate.roommind_fan_mode", state: "", attributes: {} };
+  return hass.formatEntityAttributeValue?.(st, "fan_mode", mode) || mode;
 }

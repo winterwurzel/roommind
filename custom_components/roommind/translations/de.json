@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "RoomMind",
-        "description": "RoomMind für die Raumklimasteuerung einrichten. Räume werden nach dem Setup im RoomMind-Panel konfiguriert."
+        "description": "RoomMind für die Raumklimasteuerung einrichten. Die Räume richtest du danach im RoomMind-Panel in der Seitenleiste ein."
       }
     },
     "abort": {
@@ -17,9 +17,32 @@
         "step": {
           "confirm_restart": {
             "title": "Home Assistant neu starten?",
-            "description": "RoomMind {version} wurde installiert, aber Home Assistant läuft noch mit einer älteren Version. Neustart zum Abschließen des Updates."
+            "description": "RoomMind {version} ist installiert, Home Assistant läuft aber noch mit der alten Version. Nach einem Neustart ist das Update fertig."
           }
         }
+      }
+    },
+    "deprecated_entities": {
+      "title": "RoomMind-Entitäten ersetzen",
+      "description": "Jeder Raum hat jetzt eine Klima-Entität (`climate.roommind_` plus Raum-ID), die den Raum anzeigt und steuert: Zieltemperatur, Komfort/Eco-Presets, Modus und was RoomMind gerade tut. Die alten Entitäten pro Raum funktionieren vorerst weiter, werden aber in einer künftigen Version entfernt. Diese werden noch direkt in Automationen oder Skripten verwendet:\n\n{entities}\n\nWas stattdessen:\n- Sensor Zieltemperatur → Zieltemperatur der Klima-Entität\n- Sensor Modus → deren `hvac_action`\n- Override-Entität → `climate.set_temperature` oder ein Preset der Klima-Entität (gilt bis zum nächsten Zeitplanwechsel, Preset Zeitplan (`none`) kehrt zum Zeitplan zurück)\n\nDieser Hinweis verschwindet, sobald nichts mehr darauf zugreift (geprüft beim Start von Home Assistant)."
+    }
+  },
+  "entity": {
+    "climate": {
+      "room": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "none": "Zeitplan",
+              "manual": "Manuell"
+            }
+          }
+        }
+      }
+    },
+    "binary_sensor": {
+      "air_quality": {
+        "name": "{room} Luftqualität schlecht"
       }
     }
   }

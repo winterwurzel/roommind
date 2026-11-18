@@ -42,6 +42,13 @@ The production build outputs to `custom_components/roommind/frontend/roommind-pa
 .venv/bin/pytest tests/test_coordinator.py::test_heating_mode -v
 ```
 
+Before opening a pull request, run everything CI checks (lint, mypy, tests with coverage, frontend checks and build, timezone sweep):
+
+```bash
+dev/check          # ~1 min
+dev/check --quick  # without the timezone sweep
+```
+
 Tests are organized by module:
 ```
 tests/
