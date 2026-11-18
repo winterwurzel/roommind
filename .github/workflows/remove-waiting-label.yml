@@ -18,12 +18,15 @@ jobs:
       - uses: actions/github-script@v9
         with:
           script: |
-            await github.rest.issues.removeLabel({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              name: 'waiting for feedback'
-            });
+            // A reply reopens the case: without dropping fix-released the next release would skip this issue.
+            for (const name of ['waiting for feedback', 'fix-released']) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name
+              }).catch(e => { if (e.status !== 404) throw e; });
+            }
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,

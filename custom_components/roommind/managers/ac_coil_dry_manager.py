@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from homeassistant.core import HomeAssistant
 
 from ..const import MODE_COOLING, MODE_HEATING, TargetTemps, make_roommind_context
-from ..control.mpc_controller import async_idle_device
+from ..control.mpc_controller import async_idle_device, match_fan_mode
 from ..utils.device_utils import (
     COIL_DRY_MODE_DRY,
     COIL_DRY_PHASE_BLOW,
@@ -93,11 +93,16 @@ class AcCoilDryManager:
         exclude_eids: set[str],
         force_off: bool,
         can_activate: Callable[[str], bool],
+        group_conflicts: dict[str, frozenset[str]] | None = None,
     ) -> CoilDryRoomResult:
         """Advance the state machine for every AC in this room.
 
         ``commandable`` is ``climate_active and not waiting_for_data`` — when
         False, RoomMind must send no commands at all (see #36).
+
+        ``group_conflicts`` lists per device the hvac modes its uniform-mode
+        compressor group rules out: a blow phase in one of them does not start
+        and a running one ends, else it keeps the outdoor unit from heating (#533).
         """
         result = CoilDryRoomResult()
         now = time.time()
@@ -114,8 +119,12 @@ class AcCoilDryManager:
             self._update_wetness(st, now, mode=mode, commandable=commandable, is_cooling=is_cooling)
 
             cfg = get_coil_dry_config(devices, eid, settings)
+            conflicts = (group_conflicts or {}).get(eid, frozenset())
 
-            if st.phase is not None:
+            if st.phase is not None and st.mode in conflicts:
+                _LOGGER.debug("Area '%s': coil dry on '%s' aborted (compressor group heats)", area_id, eid)
+                self._end_phase(st, completed=False)
+            elif st.phase is not None:
                 await self._advance_phase(
                     eid,
                     st,
@@ -127,7 +136,7 @@ class AcCoilDryManager:
                     commandable=commandable,
                     force_off=force_off,
                 )
-            elif self._should_start(
+            elif cfg.mode not in conflicts and self._should_start(
                 eid,
                 st,
                 cfg,
@@ -316,8 +325,10 @@ class AcCoilDryManager:
             return
         state = self.hass.states.get(eid)
         fan_modes: list[str] = (state.attributes.get("fan_modes") or []) if state else []
-        if st.fan_mode in fan_modes:
-            await self._call(eid, "set_fan_mode", {"fan_mode": st.fan_mode}, area_id)
+        fan_mode = match_fan_mode(state, st.fan_mode)
+        if fan_mode is not None:
+            st.fan_mode = fan_mode
+            await self._call(eid, "set_fan_mode", {"fan_mode": fan_mode}, area_id)
         else:
             _LOGGER.debug(
                 "Area '%s': device '%s' does not support fan_mode '%s' (available: %s), keeping current",

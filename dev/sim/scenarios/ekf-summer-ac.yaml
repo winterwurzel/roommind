@@ -1,0 +1,31 @@
+name: ekf-summer-ac
+extends: covers-solar-south
+description: >
+  Same south room, but with an AC that can hold the target on its own, over ten summer
+  days. While cooling, the AC pulls the air ~1.5 K below the building mass within
+  minutes; after each run the air rebounds towards the mass. A one-node model booked
+  that rebound as loss to the 30 °C outdoors (alpha 0.5-1.6 instead of 0.015, time
+  constant ~1 h) and part of it as solar gain. The EKF now carries the air/mass offset
+  as a lagged charge with its own gain (beta_f), so alpha, beta_c and beta_s describe
+  the whole room.
+refs: [35]
+tags: [ac, model, solar]
+duration: 10d
+house:
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_ac, profile: generic_split_ac, cool_capacity_w: 3500}]
+roommind:
+  rooms:
+    # Model reference: shading would change the solar input the EKF sees.
+    # covers-shade-before-cooling switches it back on.
+    wohnzimmer: {covers_auto_enabled: false}
+timeline: []
+expect:
+  # seeds 1-3 learn 2.05-2.2 (truth ~1.3); 0.3-3.1 before the rebound term
+  - {metric: model.learned_beta_s, room: wohnzimmer, max: 3.0, label: solar gain stays near the truth with a strong AC}
+  # seeds 1-3 learn 0.0058-0.0152 (truth 0.0148); 0.5-1.6 before the rebound term
+  - {metric: model.learned_alpha_per_h, room: wohnzimmer, min: 0.005, max: 0.05, label: loss rate of the whole room, not of the air node}
+  # 5.2-5.8 Kh with cooling starting 0.1 K past the target (seeds 1, 2), ~14 Kh with 0.2 K;
+  # 5.3-5.6 Kh with the rebound term, 7.2-8.0 (seeds 1-3) with the AC's 3-min restart delay
+  - {metric: comfort.overshoot_kh, room: wohnzimmer, max: 9, label: cooling keeps the room near its target}

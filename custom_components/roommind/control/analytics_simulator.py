@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+from functools import partial
+from typing import cast
 
 from ..const import (
     APPROACH_RATE_MIN,
@@ -11,20 +13,44 @@ from ..const import (
     DEFAULT_COMFORT_WEIGHT,
     DEFAULT_OUTDOOR_COOLING_MIN,
     DEFAULT_OUTDOOR_HEATING_MAX,
+    HEATING_SYSTEM_RADIATOR,
     MODE_COOLING,
     MODE_HEATING,
     MODE_IDLE,
+    is_override_active,
 )
 from ..utils.device_utils import get_ac_eids, get_trv_eids
-from .mpc_controller import get_can_heat_cool
-from .mpc_optimizer import MPCOptimizer
-from .residual_heat import build_residual_series, get_min_run_blocks
+from .mpc_controller import (
+    HARD_OVERSHOOT_CEILING,
+    PLAN_DT_MINUTES,
+    SAFETY_GUARD_MIN_BLOCKS,
+    compute_horizon_blocks,
+    decide_mpc_action,
+    fill_missing_targets,
+    gentle_power,
+    get_can_heat_cool,
+    heat_start_hysteresis,
+    is_mpc_enabled,
+    is_slow_heat,
+    is_valve_modulating,
+    outdoor_gate_limits,
+    valve_demand,
+)
+from .mpc_optimizer import MPCOptimizer, preheat_max_blocks, slow_start_penalty
+from .residual_heat import (
+    advance_rebound,
+    build_residual_series,
+    compute_residual_heat,
+    get_min_run_blocks,
+    heat_min_run_blocks,
+    mean_rebound,
+)
 from .thermal_model import RCModel, ThermalEKF
 
 
 def build_forecast_outdoor_series(
     forecast: list[dict] | None,
-    current_outdoor: float,
+    current_outdoor: float | None,
     n_blocks: int,
 ) -> list[float]:
     """Build outdoor temperature series for analytics prediction.
@@ -32,22 +58,26 @@ def build_forecast_outdoor_series(
     Block 0 uses ``current_outdoor`` (real-time sensor reading). Subsequent
     blocks expand each hourly forecast entry to ``60 // PLAN_DT_MINUTES`` blocks.
     Padded with the last forecast value when the horizon exceeds the forecast.
+    Without a reading (None) block 0 keeps the forecast and only gaps get the
+    placeholder, as in ``MPCController._build_outdoor_series``.
     """
-    if not forecast:
-        return [current_outdoor] * n_blocks
+    from .mpc_controller import DEFAULT_OUTDOOR_TEMP_FALLBACK, PLAN_DT_MINUTES
 
-    from .mpc_controller import PLAN_DT_MINUTES
+    fallback = current_outdoor if current_outdoor is not None else DEFAULT_OUTDOOR_TEMP_FALLBACK
+    if not forecast:
+        return [fallback] * n_blocks
 
     blocks_per_hour = 60 // PLAN_DT_MINUTES
 
     series: list[float] = []
     for f in forecast:
-        temp = f.get("temperature", current_outdoor)
+        temp = f.get("temperature", fallback)
         series.extend([temp] * blocks_per_hour)
         if len(series) >= n_blocks:
             break
 
-    series[0] = current_outdoor
+    if current_outdoor is not None:
+        series[0] = current_outdoor
 
     while len(series) < n_blocks:
         series.append(series[-1])
@@ -138,7 +168,14 @@ def simulate_prediction(
     heating_system_type: str = "",
     heating_duration_minutes: float = 0.0,
     last_power_fraction: float = 1.0,
+    residual_scale: float = 1.0,
+    residual_tau: float | None = None,
     q_occupancy: float = 0.0,
+    previous_mode: str = MODE_IDLE,
+    mode_elapsed_minutes: float | None = None,
+    q_rebound: float | None = None,
+    run_system: str | None = None,
+    outdoor_known: bool = True,
 ) -> list[float]:
     """Simulate temperature prediction for the analytics chart.
 
@@ -147,6 +184,8 @@ def simulate_prediction(
     - MPC active: rolling-horizon optimizer simulation
     - Fallback: bang-bang with hysteresis
     """
+    # Run rules follow the system actually heating (AC alone in a UFH room, as in the controller)
+    rules = heating_system_type if run_system is None else run_system
     if window_open:
         return _simulate_window_open(model, estimator, target_forecast, outdoor_series, current_temp)
 
@@ -164,7 +203,14 @@ def simulate_prediction(
             heating_system_type=heating_system_type,
             heating_duration_minutes=heating_duration_minutes,
             last_power_fraction=last_power_fraction,
+            residual_scale=residual_scale,
+            residual_tau=residual_tau,
             q_occupancy=q_occupancy,
+            previous_mode=previous_mode,
+            mode_elapsed_minutes=mode_elapsed_minutes,
+            q_rebound=q_rebound,
+            run_system=rules,
+            outdoor_known=outdoor_known,
         )
 
     return _simulate_bangbang(
@@ -180,7 +226,14 @@ def simulate_prediction(
         heating_system_type=heating_system_type,
         heating_duration_minutes=heating_duration_minutes,
         last_power_fraction=last_power_fraction,
+        residual_scale=residual_scale,
+        residual_tau=residual_tau,
         q_occupancy=q_occupancy,
+        previous_mode=previous_mode,
+        mode_elapsed_minutes=mode_elapsed_minutes,
+        q_rebound=q_rebound,
+        run_system=rules,
+        capped=is_mpc_enabled(settings) and not is_slow_heat(get_min_run_blocks(rules, PLAN_DT_MINUTES)),
     )
 
 
@@ -202,6 +255,75 @@ def _simulate_window_open(
     return pred_temps
 
 
+def _idle_drift(
+    model: RCModel,
+    T: float,
+    T_out: float,
+    q_solar: float,
+    q_residual: float,
+    q_occupancy: float,
+    charge: float | None,
+    minutes: float,
+) -> float:
+    return model.predict(
+        T,
+        T_out,
+        0.0,
+        minutes,
+        q_solar=q_solar,
+        q_residual=q_residual,
+        q_occupancy=q_occupancy,
+        q_rebound=None if charge is None else mean_rebound(charge, 0.0, minutes),
+    )
+
+
+def _continuation_power(
+    optimizer: MPCOptimizer,
+    T: float,
+    T_out: float,
+    q_solar: float,
+    q_residual: float,
+    q_occupancy: float,
+    charge: float | None,
+    mode: str,
+    target: float,
+) -> float:
+    return gentle_power(
+        optimizer,
+        mode,
+        T,
+        T_out,
+        target,
+        q_solar=q_solar,
+        q_residual=q_residual,
+        q_occupancy=q_occupancy,
+        rebound_charge=charge,
+    )
+
+
+def _schedule_series(window: list[dict], T: float) -> tuple[list[float], list[float]] | None:
+    """Heat and cool targets of the window without the price shift, None when nothing is shifted.
+
+    Same series the controller hands the pre-heat and pre-cool deadlines (``schedule_target_resolver``).
+    """
+    if not any(tf.get("price_shift_heat") or tf.get("price_shift_cool") for tf in window):
+        return None
+
+    def unshifted(value: float | None, shift: float | None) -> float | None:
+        # Rounded: the forecast's targets are, and float noise would read as a schedule rise
+        return round(value - (shift or 0.0), 3) if value is not None else None
+
+    filled = [
+        fill_missing_targets(
+            unshifted(tf.get("heat_target", tf["target_temp"]), tf.get("price_shift_heat")),
+            unshifted(tf.get("cool_target", tf["target_temp"]), tf.get("price_shift_cool")),
+            T,
+        )
+        for tf in window
+    ]
+    return [h for h, _ in filled], [c for _, c in filled]
+
+
 def _simulate_mpc(
     model: RCModel,
     target_forecast: list[dict],
@@ -216,71 +338,101 @@ def _simulate_mpc(
     heating_system_type: str = "",
     heating_duration_minutes: float = 0.0,
     last_power_fraction: float = 1.0,
+    residual_scale: float = 1.0,
+    residual_tau: float | None = None,
     q_occupancy: float = 0.0,
+    previous_mode: str = MODE_IDLE,
+    mode_elapsed_minutes: float | None = None,
+    q_rebound: float | None = None,
+    run_system: str | None = None,
+    outdoor_known: bool = True,
 ) -> list[float]:
-    """Rolling-horizon MPC simulation matching the real controller."""
-    ocm = settings.get("outdoor_cooling_min", DEFAULT_OUTDOOR_COOLING_MIN)
-    ohm = settings.get("outdoor_heating_max", DEFAULT_OUTDOOR_HEATING_MAX)
-    can_heat, can_cool = get_can_heat_cool(room_config, None, ocm, ohm, acs_can_heat=acs_can_heat)
+    """Rolling-horizon MPC simulation matching the real controller.
+
+    Every 5-min step runs the optimizer over the controller's horizon and then the
+    controller's own rules (``decide_mpc_action``: hard ceiling, guard, start
+    hysteresis, min-run continuation at gentle power, drift pre-heat only for slow
+    heat). ``previous_mode``/``mode_elapsed_minutes`` seed the run in progress, so a
+    room inside the hysteresis band keeps heating like the real one. ``outdoor_known=False``
+    (no reading, no forecast): the series is the placeholder and gates nothing, as in the controller.
+    """
+    ocm, ohm = outdoor_gate_limits(
+        outdoor_known,
+        settings.get("outdoor_cooling_min", DEFAULT_OUTDOOR_COOLING_MIN),
+        settings.get("outdoor_heating_max", DEFAULT_OUTDOOR_HEATING_MAX),
+    )
+    override_active = is_override_active(room_config)
     cw = settings.get("comfort_weight", 70)
-
-    min_run = get_min_run_blocks(heating_system_type, 5.0)
-
-    optimizer = MPCOptimizer(
-        model=model,
-        can_heat=can_heat,
-        can_cool=can_cool,
-        w_comfort=max(1.0, cw / 10.0),
-        w_energy=max(1.0, (100 - cw) / 10.0),
-        outdoor_cooling_min=ocm,
-        outdoor_heating_max=ohm,
-        min_run_blocks=min_run,
-        heating_system_type=heating_system_type,
-        approach_rate=min(1.0, APPROACH_RATE_MIN + (1.0 - APPROACH_RATE_MIN) * cw / DEFAULT_COMFORT_WEIGHT),
+    w_comfort = max(1.0, cw / 10.0)
+    w_energy = max(1.0, (100 - cw) / 10.0)
+    approach_rate = min(1.0, APPROACH_RATE_MIN + (1.0 - APPROACH_RATE_MIN) * cw / DEFAULT_COMFORT_WEIGHT)
+    valve_modulating = is_valve_modulating(
+        room_config.get("devices", []), acs_can_heat, bool(room_config.get("temperature_sensor"))
     )
 
+    rules = heating_system_type if run_system is None else run_system
+    min_run = heat_min_run_blocks(
+        rules,
+        PLAN_DT_MINUTES,
+        q_heat=model.Q_heat,
+        scale=residual_scale,
+        tau_minutes=residual_tau,
+        fast_heater=acs_can_heat,
+    )
+    cool_min_run = get_min_run_blocks("", PLAN_DT_MINUTES)
+    slow_heat = is_slow_heat(min_run)
+    start_penalty = slow_start_penalty(min_run, PLAN_DT_MINUTES)
+    heat_hysteresis = heat_start_hysteresis(acs_can_heat, bool(get_trv_eids(room_config.get("devices", []))))
+    block_seconds = PLAN_DT_MINUTES * 60
+
     T = current_temp
-    prev_action = MODE_IDLE
-    blocks_in_action = 0
-    # Track residual heat through simulated mode transitions
+    prev_action = previous_mode
+    # Seconds the current run has been on at the start of the step (None = idle)
+    run_seconds: float | None = (
+        mode_elapsed_minutes * 60 if previous_mode != MODE_IDLE and mode_elapsed_minutes is not None else None
+    )
+    # Track residual heat through simulated mode transitions; a run in progress
+    # counts, so stopping it at once leaves its afterglow like in the controller
     sim_residual_elapsed = 0.0  # minutes since simulated heating stopped
-    sim_heating_blocks = 0  # blocks of simulated heating for charge fraction
-    sim_was_heating = False
+    # (radiators only, as in the controller)
+    sim_was_heating = heating_system_type == HEATING_SYSTEM_RADIATOR and previous_mode == MODE_HEATING
+    sim_was_heating = sim_was_heating and run_seconds is not None
+    sim_heating_blocks = round(cast(float, run_seconds) / block_seconds) if sim_was_heating else 0
     # Seed with real residual state
     current_q_residual = q_residual
+    charge = q_rebound
     pred_temps: list[float] = []
 
     for i in range(len(target_forecast)):
         tgt = target_forecast[i]["target_temp"]
         h_tgt = target_forecast[i].get("heat_target", tgt)
         c_tgt = target_forecast[i].get("cool_target", tgt)
+        qs = solar_series[i] if solar_series and i < len(solar_series) else 0.0
+        T_out = outdoor_series[i]
 
         # Force idle when both targets are None (devices turned off)
         if h_tgt is None and c_tgt is None:
             action = MODE_IDLE
             pf = 0.0
-        # External stickiness: once heating/cooling, continue until
-        # target is reached.  Mirrors real HVAC behaviour.
-        elif prev_action == MODE_HEATING and h_tgt is not None and T < h_tgt and can_heat:
-            action = MODE_HEATING
-            pf = 1.0
-        elif prev_action == MODE_COOLING and c_tgt is not None and T > c_tgt and can_cool:
-            action = MODE_COOLING
-            pf = 1.0
-        elif prev_action != MODE_IDLE and blocks_in_action < min_run:
-            action = prev_action
-            pf = 1.0
         else:
-            remaining_outdoor = outdoor_series[i:]
-            remaining_heat_targets = [
-                tf.get("heat_target", tf["target_temp"]) if tf.get("heat_target", tf["target_temp"]) is not None else T
-                for tf in target_forecast[i:]
+            can_heat, can_cool = get_can_heat_cool(
+                room_config, T_out, ocm, ohm, acs_can_heat=acs_can_heat, override_active=override_active
+            )
+            horizon = compute_horizon_blocks(model, T, h_tgt if h_tgt is not None else c_tgt)
+            window = target_forecast[i : i + horizon]
+            filled = [
+                fill_missing_targets(
+                    tf.get("heat_target", tf["target_temp"]),
+                    tf.get("cool_target", tf["target_temp"]),
+                    T,
+                )
+                for tf in window
             ]
-            remaining_cool_targets = [
-                tf.get("cool_target", tf["target_temp"]) if tf.get("cool_target", tf["target_temp"]) is not None else T
-                for tf in target_forecast[i:]
-            ]
-            remaining_solar = solar_series[i:] if solar_series else None
+            heat_series = [h for h, _ in filled]
+            cool_series = [c for _, c in filled]
+            schedule_series = _schedule_series(window, T)
+            remaining_outdoor = outdoor_series[i : i + len(window)]
+            remaining_solar = solar_series[i : i + len(window)] if solar_series else None
             # Build residual series for remaining blocks
             remaining_residual = None
             if heating_system_type and current_q_residual > 0:
@@ -288,39 +440,101 @@ def _simulate_mpc(
                     sim_residual_elapsed,
                     heating_system_type,
                     len(remaining_outdoor),
-                    5.0,
+                    PLAN_DT_MINUTES,
                     last_power_fraction,
-                    sim_heating_blocks * 5.0 if sim_was_heating else heating_duration_minutes,
+                    sim_heating_blocks * PLAN_DT_MINUTES if sim_was_heating else heating_duration_minutes,
+                    residual_scale,
+                    residual_tau,
                 )
-            remaining_occupancy = [q_occupancy] * len(remaining_outdoor)
+            optimizer = MPCOptimizer(
+                model=model,
+                can_heat=can_heat,
+                can_cool=can_cool,
+                w_comfort=w_comfort,
+                w_energy=w_energy,
+                outdoor_cooling_min=ocm,
+                outdoor_heating_max=ohm,
+                min_run_blocks=min_run,
+                cool_min_run_blocks=cool_min_run,
+                override_active=override_active,
+                heating_system_type=rules,
+                approach_rate=approach_rate,
+                start_penalty=start_penalty,
+                fast_heater_shares_model=acs_can_heat,
+                preheat_max_blocks=preheat_max_blocks(
+                    cw, PLAN_DT_MINUTES, enabled=room_config.get("preheat_enabled", True)
+                ),
+                residual_scale=residual_scale,
+                residual_tau=residual_tau,
+            )
             plan = optimizer.optimize(
                 T_room=T,
                 T_outdoor_series=remaining_outdoor,
-                heat_target_series=remaining_heat_targets,
-                cool_target_series=remaining_cool_targets,
-                dt_minutes=5.0,
+                heat_target_series=heat_series,
+                cool_target_series=cool_series,
+                dt_minutes=PLAN_DT_MINUTES,
                 solar_series=remaining_solar,
                 residual_series=remaining_residual,
-                occupancy_series=remaining_occupancy,
+                occupancy_series=[q_occupancy] * len(remaining_outdoor),
+                rebound_charge=charge,
+                initial_mode=prev_action,
+                heat_run=(
+                    (cast(float, run_seconds) / 60.0, last_power_fraction)
+                    if rules == HEATING_SYSTEM_RADIATOR and prev_action == MODE_HEATING and run_seconds is not None
+                    else None
+                ),
+                schedule_heat_series=schedule_series[0] if schedule_series else None,
+                schedule_cool_series=schedule_series[1] if schedule_series else None,
             )
-            action = plan.get_current_action()
-            pf = plan.get_current_power_fraction()
+            in_run = run_seconds is not None
+            action, pf = decide_mpc_action(
+                plan.get_current_action(),
+                plan.get_current_power_fraction(),
+                T,
+                heat_series,
+                cool_series,
+                guard_blocks=max(SAFETY_GUARD_MIN_BLOCKS, min_run, plan.lookahead_blocks, plan.preheat_blocks + 1),
+                slow_heat=slow_heat,
+                previous_mode=prev_action,
+                heat_in_min_run=in_run
+                and prev_action == MODE_HEATING
+                and cast(float, run_seconds) < min_run * block_seconds,
+                cool_in_min_run=in_run
+                and prev_action == MODE_COOLING
+                and cast(float, run_seconds) < cool_min_run * block_seconds,
+                can_heat=can_heat,
+                can_cool=can_cool,
+                heat_hysteresis=heat_hysteresis,
+                idle_drift=partial(_idle_drift, model, T, T_out, qs, current_q_residual, q_occupancy, charge),
+                continuation_power=partial(
+                    _continuation_power, optimizer, T, T_out, qs, current_q_residual, q_occupancy, charge
+                ),
+                valve_demand=(
+                    partial(valve_demand, model, T, T_out, q_solar=qs, q_occupancy=q_occupancy)
+                    if valve_modulating
+                    else None
+                ),
+                outdoor_now=T_out,
+                outdoor_limits=(ocm, ohm),
+            )
         if action == MODE_HEATING:
             Q = pf * model.Q_heat
         elif action == MODE_COOLING:
             Q = -(pf * model.Q_cool)
         else:
             Q = 0.0
-        qs = solar_series[i] if solar_series and i < len(solar_series) else 0.0
         T_new = model.predict(
             T,
-            outdoor_series[i],
+            T_out,
             Q,
-            5.0,
+            PLAN_DT_MINUTES,
             q_solar=qs,
             q_residual=current_q_residual if Q == 0.0 else 0.0,
             q_occupancy=q_occupancy,
+            q_rebound=None if charge is None or Q != 0.0 else mean_rebound(charge, 0.0, PLAN_DT_MINUTES),
         )
+        if charge is not None:
+            charge = advance_rebound(charge, 0.0, PLAN_DT_MINUTES)
         T = max(5.0, min(40.0, T_new))
 
         # Update simulated residual tracking
@@ -330,29 +544,36 @@ def _simulate_mpc(
             sim_residual_elapsed = 0.0
             current_q_residual = 0.0
         else:
-            if sim_was_heating and sim_residual_elapsed == 0.0:
-                # Just transitioned from heating to non-heating
-                pass
-            sim_residual_elapsed += 5.0
+            sim_residual_elapsed += PLAN_DT_MINUTES
             if heating_system_type and sim_was_heating:
-                from .residual_heat import compute_residual_heat
-
                 current_q_residual = compute_residual_heat(
                     sim_residual_elapsed,
                     heating_system_type,
                     last_power_fraction,
-                    sim_heating_blocks * 5.0,
+                    sim_heating_blocks * PLAN_DT_MINUTES,
+                    residual_scale,
+                    residual_tau,
                 )
 
-        if action == prev_action:
-            blocks_in_action += 1
+        if action == MODE_IDLE:
+            run_seconds = None
+        elif action != prev_action or run_seconds is None:
+            run_seconds = block_seconds
         else:
-            prev_action = action
-            blocks_in_action = 1
+            run_seconds += block_seconds
+        prev_action = action
 
         pred_temps.append(round(T, 2))
 
     return pred_temps
+
+
+def _past_ceiling(mode: str, T: float, heat: float | None, cool: float | None, capped: bool) -> bool:
+    if not capped:
+        return False
+    if mode == MODE_HEATING:
+        return heat is not None and T >= heat + HARD_OVERSHOOT_CEILING
+    return mode == MODE_COOLING and cool is not None and T <= cool - HARD_OVERSHOOT_CEILING
 
 
 def _simulate_bangbang(
@@ -369,23 +590,39 @@ def _simulate_bangbang(
     heating_system_type: str = "",
     heating_duration_minutes: float = 0.0,
     last_power_fraction: float = 1.0,
+    residual_scale: float = 1.0,
+    residual_tau: float | None = None,
     q_occupancy: float = 0.0,
+    previous_mode: str = MODE_IDLE,
+    mode_elapsed_minutes: float | None = None,
+    q_rebound: float | None = None,
+    run_system: str | None = None,
+    capped: bool = True,
 ) -> list[float]:
-    """Bang-bang fallback simulation with mode stickiness + idle rate cap."""
+    """Bang-bang fallback simulation with mode stickiness + idle rate cap.
+
+    ``capped``: the learning-phase min run stops at the hard ceiling; Simple mode
+    (``control_mode`` bangbang) keeps the plain rule.
+    """
     observed_idle_rate = compute_observed_idle_rate(all_points)
     has_heat = bool(get_trv_eids(room_config.get("devices", []))) or acs_can_heat
     has_cool = bool(get_ac_eids(room_config.get("devices", [])))
 
-    min_run = get_min_run_blocks(heating_system_type, 5.0)
+    rules = heating_system_type if run_system is None else run_system
+    min_run = get_min_run_blocks(rules, PLAN_DT_MINUTES)
+    # Cooling always runs on an AC, also in a UFH room
+    cool_min_run = get_min_run_blocks("", PLAN_DT_MINUTES)
 
     T = current_temp
-    sim_mode = MODE_IDLE
-    blocks_in_mode = 0
+    sim_mode = previous_mode
+    # A run without a known start counts as past its min run, like the controller's
+    blocks_in_mode = int(mode_elapsed_minutes // PLAN_DT_MINUTES) if mode_elapsed_minutes is not None else min_run
     # Track residual heat through simulated mode transitions
     sim_residual_elapsed = 0.0
     sim_heating_blocks = 0
     sim_was_heating = False
     current_q_residual = q_residual
+    charge = q_rebound
     pred_temps: list[float] = []
 
     for i, tf in enumerate(target_forecast):
@@ -396,8 +633,12 @@ def _simulate_bangbang(
             # Force idle when both targets are None (devices turned off)
             sim_mode = MODE_IDLE
             blocks_in_mode = 0
-        elif sim_mode != MODE_IDLE and blocks_in_mode < min_run:
-            pass  # honour minimum run time
+        elif (
+            sim_mode != MODE_IDLE
+            and blocks_in_mode < (min_run if sim_mode == MODE_HEATING else cool_min_run)
+            and not _past_ceiling(sim_mode, T, h_tgt, c_tgt, capped)
+        ):
+            pass  # honour minimum run time, up to the hard ceiling like the controller
         elif sim_mode == MODE_HEATING:
             if h_tgt is None or T >= h_tgt:
                 sim_mode = MODE_IDLE
@@ -430,7 +671,10 @@ def _simulate_bangbang(
             q_solar=qs,
             q_residual=current_q_residual if Q == 0.0 else 0.0,
             q_occupancy=q_occupancy,
+            q_rebound=None if charge is None or Q != 0.0 else mean_rebound(charge, 0.0, 5.0),
         )
+        if charge is not None:
+            charge = advance_rebound(charge, 0.0, 5.0)
         if Q == 0.0 and observed_idle_rate is not None:
             model_delta = T_new - T
             max_delta = observed_idle_rate * 2.0
@@ -451,13 +695,13 @@ def _simulate_bangbang(
         else:
             sim_residual_elapsed += 5.0
             if heating_system_type and sim_was_heating:
-                from .residual_heat import compute_residual_heat
-
                 current_q_residual = compute_residual_heat(
                     sim_residual_elapsed,
                     heating_system_type,
                     last_power_fraction,
                     sim_heating_blocks * 5.0,
+                    residual_scale,
+                    residual_tau,
                 )
 
         pred_temps.append(round(T, 2))

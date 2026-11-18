@@ -7,7 +7,11 @@ import logging
 import os
 import time
 
+from ..const import MODE_COOLING, MODE_HEATING
+
 _LOGGER = logging.getLogger(__name__)
+
+MODEL_INPUT_FIELDS = ("model_power", "model_solar", "model_residual", "model_occupancy")
 
 DETAIL_FIELDS = [
     "timestamp",
@@ -23,7 +27,28 @@ DETAIL_FIELDS = [
     "cover_reason",
     "device_setpoint",
     "occupancy",
+    "humidity",
+    "heat_target",
+    "cool_target",
+    "target_reason",
+    "mold_boost",
+    "price",
+    "price_level",
+    "price_shift",
+    # Runs starting at this row, summed per history bucket: the bucket keeps only its first
+    # mode, its transitions lose the short runs
+    "heat_starts",
+    "cool_starts",
+    # Extremes of a history bucket: a short run peaks inside it, the bucket mean hides the peak
+    "room_temp_max",
+    "room_temp_min",
+    # Room air CO2 in ppm (#267)
+    "co2",
+    # What the model learned from (analytics backtest): signed delivered power share
+    # (+ heating, - cooling), sun behind the covers, residual heat share, occupancy
+    *MODEL_INPUT_FIELDS,
 ]
+START_FIELDS = {MODE_HEATING: "heat_starts", MODE_COOLING: "cool_starts"}
 DETAIL_MAX_AGE = 48 * 3600  # 48 hours
 HISTORY_MAX_AGE = 90 * 24 * 3600  # 90 days
 
@@ -33,15 +58,26 @@ class HistoryStore:
 
     def __init__(self, base_dir: str) -> None:
         self._base_dir = base_dir
+        self._last_mode: dict[str, str] = {}
 
     def _ensure_dir(self) -> None:
         os.makedirs(self._base_dir, exist_ok=True)
 
+    @staticmethod
+    def _is_safe_id(area_id: str) -> bool:
+        """True when the id cannot point outside the history directory ('../x', absolute paths)."""
+        return bool(area_id) and os.path.basename(area_id) == area_id and "\0" not in area_id
+
+    def _room_path(self, area_id: str, kind: str) -> str:
+        if not self._is_safe_id(area_id):
+            raise ValueError(f"Unsafe room id for history files: {area_id!r}")
+        return os.path.join(self._base_dir, f"{area_id}_{kind}.csv")
+
     def _detail_path(self, area_id: str) -> str:
-        return os.path.join(self._base_dir, f"{area_id}_detail.csv")
+        return self._room_path(area_id, "detail")
 
     def _history_path(self, area_id: str) -> str:
-        return os.path.join(self._base_dir, f"{area_id}_history.csv")
+        return self._room_path(area_id, "history")
 
     @staticmethod
     def _migrate_header(path: str) -> None:
@@ -68,6 +104,12 @@ class HistoryStore:
         ts = timestamp or time.time()
         path = self._detail_path(area_id)
         self._migrate_header(path)
+        mode = data.get("mode", "")
+        if area_id not in self._last_mode:
+            last = self.read_detail(area_id)[-1:]
+            self._last_mode[area_id] = last[0].get("mode", "") if last else mode
+        previous = self._last_mode[area_id]
+        self._last_mode[area_id] = mode
 
         with open(path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=DETAIL_FIELDS)
@@ -88,6 +130,17 @@ class HistoryStore:
                     "cover_reason": data.get("cover_reason", ""),
                     "device_setpoint": data.get("device_setpoint", ""),
                     "occupancy": data.get("occupancy", ""),
+                    "humidity": data.get("humidity", ""),
+                    "heat_target": data.get("heat_target", ""),
+                    "cool_target": data.get("cool_target", ""),
+                    "target_reason": data.get("target_reason", ""),
+                    "mold_boost": data.get("mold_boost", ""),
+                    "price": data.get("price", ""),
+                    "price_level": data.get("price_level", ""),
+                    "price_shift": data.get("price_shift", ""),
+                    "co2": data.get("co2", ""),
+                    **{field: data.get(field, "") for field in MODEL_INPUT_FIELDS},
+                    **{key: int(mode == run and previous != run) for run, key in START_FIELDS.items()},
                 }
             )
 
@@ -99,6 +152,8 @@ class HistoryStore:
         end_ts: float | None = None,
     ) -> list[dict]:
         """Read detail CSV rows, optionally filtered by age or timestamp range."""
+        if not self._is_safe_id(area_id):
+            return []
         return self._read_csv(self._detail_path(area_id), max_age, start_ts, end_ts)
 
     def read_history(
@@ -109,6 +164,8 @@ class HistoryStore:
         end_ts: float | None = None,
     ) -> list[dict]:
         """Read history CSV rows."""
+        if not self._is_safe_id(area_id):
+            return []
         return self._read_csv(self._history_path(area_id), max_age, start_ts, end_ts)
 
     def _read_csv(
@@ -179,6 +236,9 @@ class HistoryStore:
 
     def remove_room(self, area_id: str) -> None:
         """Delete all history files for a room."""
+        self._last_mode.pop(area_id, None)
+        if not self._is_safe_id(area_id):
+            return
         for path in (self._detail_path(area_id), self._history_path(area_id)):
             if os.path.isfile(path):
                 os.remove(path)
@@ -188,10 +248,14 @@ class HistoryStore:
         if not rows:
             return []
         buckets: dict[int, list[dict]] = {}
-        for row in rows:
+        starts: dict[int, dict[str, int]] = {}
+        for i, row in enumerate(rows):
             ts = float(row["timestamp"])
             bucket_key = int(ts // bucket_seconds)
             buckets.setdefault(bucket_key, []).append(row)
+            counts = starts.setdefault(bucket_key, dict.fromkeys(START_FIELDS.values(), 0))
+            for run, key in START_FIELDS.items():
+                counts[key] += self._row_starts(row, rows[i - 1] if i else None, run, key)
 
         result = []
         for bucket_key in sorted(buckets):
@@ -201,6 +265,8 @@ class HistoryStore:
                 "mode": bucket[0]["mode"],
                 "window_open": bucket[0].get("window_open", ""),
                 "device_setpoint": bucket[0].get("device_setpoint", ""),
+                "target_reason": bucket[0].get("target_reason", ""),
+                "price_level": bucket[0].get("price_level", ""),
             }
             for field in (
                 "room_temp",
@@ -210,18 +276,40 @@ class HistoryStore:
                 "heating_power",
                 "solar_irradiance",
                 "blind_position",
+                "humidity",
+                "heat_target",
+                "cool_target",
+                "mold_boost",
+                "price",
+                "price_shift",
+                "co2",
+                *MODEL_INPUT_FIELDS,
             ):
-                vals = []
-                for r in bucket:
-                    v = r.get(field, "")
-                    if v != "":
-                        try:
-                            vals.append(float(v))
-                        except (ValueError, TypeError):
-                            pass
+                vals = [v for r in bucket if (v := self._float(r.get(field, ""))) is not None]
                 avg_row[field] = round(sum(vals) / len(vals), 2) if vals else ""
+            temps = [t for r in bucket if (t := self._float(r.get("room_temp", ""))) is not None]
+            avg_row["room_temp_max"] = max(temps) if temps else ""
+            avg_row["room_temp_min"] = min(temps) if temps else ""
+            avg_row.update(starts[bucket_key])
             result.append(avg_row)
         return result
+
+    @staticmethod
+    def _float(value: str) -> float | None:
+        if value == "":
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _row_starts(row: dict, previous: dict | None, run: str, key: str) -> int:
+        """Runs of ``run`` starting at ``row``; rows from before the column compare to the row before."""
+        try:
+            return int(row.get(key, ""))
+        except (ValueError, TypeError):
+            return int(row.get("mode") == run and previous is not None and previous.get("mode") != run)
 
     @staticmethod
     def _safe_ts(row: dict) -> float:
@@ -234,6 +322,7 @@ class HistoryStore:
     def _append_history(self, area_id: str, rows: list[dict]) -> None:
         self._ensure_dir()
         path = self._history_path(area_id)
+        self._migrate_header(path)
         file_exists = os.path.isfile(path)
         with open(path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=DETAIL_FIELDS)
@@ -244,6 +333,6 @@ class HistoryStore:
     def _rewrite_csv(self, path: str, rows: list[dict]) -> None:
         self._ensure_dir()
         with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=DETAIL_FIELDS)
+            writer = csv.DictWriter(f, fieldnames=DETAIL_FIELDS, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(rows)

@@ -22,6 +22,9 @@ from custom_components.roommind.utils.device_utils import (
     get_entity_ids_by_type,
     get_idle_action,
     get_room_heating_system_type,
+    get_setback_auto_off,
+    get_setpoint_offset,
+    get_setpoint_offsets,
     get_trv_eids,
     has_reliable_hvac_modes,
     is_ac_type,
@@ -784,3 +787,106 @@ def test_legacy_to_devices_sets_coil_dry_defaults():
     assert devices[0]["coil_dry_minutes"] == 0
     assert devices[0]["coil_dry_mode"] == ""
     assert devices[0]["coil_dry_fan_mode"] == ""
+
+
+# ---------------------------------------------------------------------------
+# get_setpoint_offset / get_setpoint_offsets (#369)
+# ---------------------------------------------------------------------------
+
+
+class TestGetSetpointOffsets:
+    def test_direct_device_with_offset(self):
+        devices = [{"entity_id": "climate.ac", "type": "ac", "setpoint_mode": "direct", "setpoint_offset": 1.5}]
+        assert get_setpoint_offset(devices, "climate.ac") == 1.5
+        assert get_setpoint_offsets(devices) == {"climate.ac": 1.5}
+
+    def test_negative_offset(self):
+        devices = [{"entity_id": "climate.ac", "type": "ac", "setpoint_mode": "direct", "setpoint_offset": -2.0}]
+        assert get_setpoint_offset(devices, "climate.ac") == -2.0
+
+    def test_missing_field_is_zero(self):
+        devices = [{"entity_id": "climate.ac", "type": "ac", "setpoint_mode": "direct"}]
+        assert get_setpoint_offset(devices, "climate.ac") == 0.0
+        assert get_setpoint_offsets(devices) == {}
+
+    def test_proportional_device_ignores_offset(self):
+        devices = [{"entity_id": "climate.ac", "type": "ac", "setpoint_mode": "proportional", "setpoint_offset": 2.0}]
+        assert get_setpoint_offset(devices, "climate.ac") == 0.0
+        assert get_setpoint_offsets(devices) == {}
+
+    def test_unknown_device_is_zero(self):
+        assert get_setpoint_offset([], "climate.ghost") == 0.0
+
+    def test_invalid_values_are_zero(self):
+        for bad in ("abc", None, float("nan")):
+            devices = [{"entity_id": "climate.ac", "setpoint_mode": "direct", "setpoint_offset": bad}]
+            assert get_setpoint_offset(devices, "climate.ac") == 0.0
+
+    def test_out_of_range_is_clamped(self):
+        devices = [
+            {"entity_id": "climate.a", "setpoint_mode": "direct", "setpoint_offset": 99},
+            {"entity_id": "climate.b", "setpoint_mode": "direct", "setpoint_offset": -99},
+        ]
+        assert get_setpoint_offsets(devices) == {"climate.a": 5.0, "climate.b": -5.0}
+
+    def test_device_without_entity_id_skipped(self):
+        devices = [{"setpoint_mode": "direct", "setpoint_offset": 1.0}]
+        assert get_setpoint_offsets(devices) == {}
+
+
+def test_valve_trvs_ignore_the_direct_setpoint_mode():
+    """A TRV with direct valve control always gets the boost (#413)."""
+    from custom_components.roommind.utils.device_utils import (
+        configured_valves,
+        get_direct_setpoint_eids,
+        get_setpoint_offset,
+        get_valve_entities,
+    )
+
+    devices = [
+        {
+            "entity_id": "climate.v",
+            "type": "trv",
+            "setpoint_mode": "direct",
+            "setpoint_offset": 1.0,
+            "valve_opening_entity": "number.v_open",
+            "valve_closing_entity": "number.v_close",
+        },
+        {"entity_id": "climate.d", "type": "trv", "setpoint_mode": "direct", "setpoint_offset": 1.0},
+        {"entity_id": "climate.ac", "type": "ac", "valve_opening_entity": "number.ignored"},
+        {"entity_id": "climate.c", "type": "trv", "valve_closing_entity": "number.c_close"},
+    ]
+    assert get_direct_setpoint_eids(devices) == {"climate.d"}
+    assert get_setpoint_offset(devices, "climate.v") == 0.0
+    assert get_setpoint_offset(devices, "climate.d") == 1.0
+    assert get_valve_entities(devices) == {"climate.v": ("number.v_open", "number.v_close", False)}
+    assert configured_valves({"a": {"devices": devices}, "b": {}}) == get_valve_entities(devices)
+
+
+def test_valve_closing_mode_idle_opening():
+    """SONOFF TRV-ZBT: the second entity is the opening while idle, only when the user says so (#482)."""
+    from custom_components.roommind.utils.device_utils import get_valve_entities
+
+    def device(**extra):
+        return {
+            "entity_id": "climate.v",
+            "type": "trv",
+            "valve_opening_entity": "number.v_heating",
+            "valve_closing_entity": "number.v_idle",
+            **extra,
+        }
+
+    assert get_valve_entities([device()])["climate.v"].idle_opening is False
+    assert get_valve_entities([device(valve_closing_mode="closing_degree")])["climate.v"].idle_opening is False
+    assert get_valve_entities([device(valve_closing_mode="idle_opening")])["climate.v"].idle_opening is True
+
+
+def test_get_setback_auto_off_is_opt_in():
+    """Missing field or device means the setback is kept (#255)."""
+    devices = [
+        {"entity_id": "climate.a", "type": "ac", "idle_action": "setback"},
+        {"entity_id": "climate.b", "type": "ac", "idle_action": "setback", "setback_auto_off": True},
+    ]
+    assert get_setback_auto_off(devices, "climate.a") is False
+    assert get_setback_auto_off(devices, "climate.b") is True
+    assert get_setback_auto_off(devices, "climate.missing") is False

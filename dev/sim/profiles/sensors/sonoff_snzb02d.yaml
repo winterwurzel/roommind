@@ -1,0 +1,4 @@
+description: Zigbee T/H sensor with display (SONOFF SNZB-02D class), reports in 0.2 K steps or hourly.
+extends: default_temperature
+resolution: 0.1
+report: {min_delta: 0.2, heartbeat_s: 3600, min_interval_s: 5}

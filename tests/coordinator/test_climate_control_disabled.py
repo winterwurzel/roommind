@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -878,3 +878,99 @@ class TestPerRoomClimateControlDisabled:
         data = await coordinator._async_update_data()
 
         assert data["rooms"]["living_room_abc12345"]["mode"] == "heating"
+
+
+class TestRoomSwitchedOffByRoomClimate:
+    """The room climate entity's off is carried out by the next cycle (#238)."""
+
+    @staticmethod
+    def _setup(hass, mock_config_entry, room, **states):
+        store = _make_store_mock({"living_room_abc12345": room})
+        store.get_room.side_effect = lambda area_id: dict(room)
+        store.get_settings.return_value = {"climate_control_active": True, "outdoor_temp_sensor": "sensor.outdoor_temp"}
+        hass.data = {"roommind": {"store": store}}
+        hass.states.get = MagicMock(side_effect=make_mock_states_get(temp="18.0", humidity="55.0", **states))
+        hass.services.async_call = AsyncMock()
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        coordinator._rooms_to_switch_off.add("living_room_abc12345")
+        return coordinator
+
+    @staticmethod
+    def _climate_calls(hass):
+        return [(c[0][1], c[0][2]) for c in hass.services.async_call.call_args_list if c[0][0] == "climate"]
+
+    @pytest.mark.asyncio
+    async def test_next_cycle_switches_devices_off_once(self, hass, mock_config_entry):
+        room = {**SAMPLE_ROOM, "climate_control_enabled": False}
+        coordinator = self._setup(hass, mock_config_entry, room)
+        coordinator._compressor_manager = MagicMock()
+
+        data = await coordinator._async_update_data()
+
+        assert data["rooms"]["living_room_abc12345"]["mode"] == "idle"
+        assert ("set_hvac_mode", {"entity_id": "climate.living_room", "hvac_mode": "off"}) in self._climate_calls(hass)
+        coordinator._compressor_manager.update_member.assert_any_call("climate.living_room", False)
+        assert coordinator._rooms_to_switch_off == set()
+
+        hass.services.async_call.reset_mock()
+        await coordinator._async_update_data()
+        assert self._climate_calls(hass) == []
+
+    @pytest.mark.asyncio
+    async def test_low_idle_device_gets_the_fallback_setpoint(self, hass, mock_config_entry):
+        """A TRV kept out of off mode (idle_action low) with min_temp 0 drops to eco minus the setback offset."""
+        device = {**SAMPLE_ROOM["devices"][0], "idle_action": "low"}
+        room = {**SAMPLE_ROOM, "devices": [device], "climate_control_enabled": False}
+        coordinator = self._setup(hass, mock_config_entry, room)
+        trv = MagicMock()
+        trv.state = "heat"
+        trv.attributes = {"min_temp": 0, "temperature": 28.0, "hvac_modes": ["heat"]}
+        fallback = hass.states.get.side_effect
+        hass.states.get = MagicMock(side_effect=lambda eid: trv if eid == "climate.living_room" else fallback(eid))
+
+        await coordinator._async_update_data()
+
+        setpoints = [d["temperature"] for svc, d in self._climate_calls(hass) if svc == "set_temperature"]
+        assert len(setpoints) == 1 and setpoints[0] < 28.0
+
+    @pytest.mark.asyncio
+    async def test_room_switched_back_on_before_the_cycle_is_not_switched_off(self, hass, mock_config_entry):
+        coordinator = self._setup(hass, mock_config_entry, SAMPLE_ROOM)
+
+        data = await coordinator._async_update_data()
+
+        assert data["rooms"]["living_room_abc12345"]["mode"] == "heating"
+        assert ("set_hvac_mode", {"entity_id": "climate.living_room", "hvac_mode": "off"}) not in self._climate_calls(
+            hass
+        )
+        assert coordinator._rooms_to_switch_off == set()
+
+    @pytest.mark.asyncio
+    async def test_cycle_on_a_stale_snapshot_leaves_the_off_to_the_next(self, hass, mock_config_entry):
+        """Off arrives while a cycle runs on a snapshot that still has the room enabled."""
+        disabled = {**SAMPLE_ROOM, "climate_control_enabled": False}
+        coordinator = self._setup(hass, mock_config_entry, SAMPLE_ROOM)
+        store = hass.data["roommind"]["store"]
+        store.get_room.side_effect = lambda area_id: dict(disabled)
+
+        await coordinator._async_update_data()
+        assert coordinator._rooms_to_switch_off == {"living_room_abc12345"}
+
+        store.get_rooms.return_value = {"living_room_abc12345": disabled}
+        hass.services.async_call.reset_mock()
+        await coordinator._async_update_data()
+
+        assert ("set_hvac_mode", {"entity_id": "climate.living_room", "hvac_mode": "off"}) in self._climate_calls(hass)
+        assert coordinator._rooms_to_switch_off == set()
+
+    @pytest.mark.asyncio
+    async def test_failed_off_is_logged_and_skips_group_update(self, hass, mock_config_entry, caplog):
+        room = {**SAMPLE_ROOM, "climate_control_enabled": False}
+        coordinator = self._setup(hass, mock_config_entry, room)
+        coordinator._compressor_manager = MagicMock()
+
+        with patch("custom_components.roommind.coordinator.async_idle_device", side_effect=RuntimeError("unavailable")):
+            await coordinator._async_update_data()
+
+        assert "switching 'climate.living_room' off failed" in caplog.text
+        coordinator._compressor_manager.update_member.assert_not_called()

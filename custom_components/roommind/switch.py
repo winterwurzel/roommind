@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, VACATION_SENTINEL_UNTIL
 from .coordinator import RoomMindCoordinator
+from .utils.area_utils import rooms_with_area
 
 
 def _create_room_switches(
@@ -33,13 +34,13 @@ async def async_setup_entry(
     store = hass.data[DOMAIN]["store"]
     coordinator.async_add_switch_entities = async_add_entities
 
-    # Global switches (always created)
     entities: list[SwitchEntity] = [
         RoomMindVacationSwitch(coordinator),
+        RoomMindGlobalClimateControlSwitch(coordinator),
         RoomMindBoilerHeatingSwitch(coordinator),
     ]
 
-    rooms = store.get_rooms()
+    rooms = rooms_with_area(hass, store.get_rooms())
     for area_id, room in rooms.items():
         entities.append(RoomMindClimateControlSwitch(coordinator, area_id))
         entities.append(RoomMindPreferElectricSwitch(coordinator, area_id))
@@ -219,4 +220,32 @@ class RoomMindBoilerHeatingSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         store = self.coordinator.hass.data[DOMAIN]["store"]
         await store.async_save_settings({"boiler_heating_enabled": False})
+        await self.coordinator.async_request_refresh()
+
+
+class RoomMindGlobalClimateControlSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch mirroring the global climate control setting of the settings page (#291)."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: RoomMindCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{DOMAIN}_climate_control"
+        self._attr_name = "RoomMind Climate Control"
+        self._attr_icon = "mdi:thermostat"
+        self.entity_id = f"switch.{DOMAIN}_climate_control"
+
+    @property
+    def is_on(self) -> bool:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        return bool(store.get_settings().get("climate_control_active", True))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        await store.async_save_settings({"climate_control_active": True})
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        store = self.coordinator.hass.data[DOMAIN]["store"]
+        await store.async_save_settings({"climate_control_active": False})
         await self.coordinator.async_request_refresh()

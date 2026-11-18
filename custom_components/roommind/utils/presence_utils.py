@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 from homeassistant.core import State
 from homeassistant.helpers import entity_registry as er
 
+from ..const import DEFAULT_OCCUPANCY_ECO_DELAY_MINUTES
+
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
@@ -72,3 +74,23 @@ def _is_entity_home(state: State) -> bool:
     if state.entity_id.startswith(("person.", "device_tracker.")):
         return bool(state.state == "home")
     return bool(state.state == "on")
+
+
+def is_room_vacant(hass: HomeAssistant, room: dict, now: float) -> bool:
+    """Return True once every occupancy sensor of an occupancy-eco room has been off for the delay (#180).
+
+    Reads ``last_changed`` instead of timing the poll, so a motion pulse shorter
+    than the update interval still restarts the delay. Unavailable, unknown or
+    missing sensors count as occupied.
+    """
+    sensors = room.get("occupancy_sensors", [])
+    if not room.get("occupancy_eco_enabled", False) or not sensors:
+        return False
+    last_change = 0.0
+    for eid in sensors:
+        state = hass.states.get(eid)
+        if state is None or state.state != "off":
+            return False
+        last_change = max(last_change, state.last_changed.timestamp())
+    delay_minutes = float(room.get("occupancy_eco_delay", DEFAULT_OCCUPANCY_ECO_DELAY_MINUTES))
+    return now - last_change >= delay_minutes * 60

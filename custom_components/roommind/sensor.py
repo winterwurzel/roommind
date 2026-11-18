@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import RoomMindCoordinator
+from .utils.area_utils import rooms_with_area
 
 
 def _create_room_entities(coordinator: RoomMindCoordinator, area_id: str) -> list[SensorEntity]:
@@ -34,7 +35,7 @@ async def async_setup_entry(
     coordinator.async_add_entities = async_add_entities
 
     # Create entities for rooms that already exist in the store
-    rooms = store.get_rooms()
+    rooms = rooms_with_area(hass, store.get_rooms())
     entities: list[SensorEntity] = []
     for area_id in rooms:
         entities.extend(_create_room_entities(coordinator, area_id))
@@ -47,6 +48,8 @@ class _RoomMindBaseSensor(CoordinatorEntity, SensorEntity):
     """Base class for all RoomMind room sensors."""
 
     _attr_has_entity_name = True
+    # Deprecated (#238): only rooms set up before 2.0 keep them enabled; HA applies this to new registry entries only
+    _attr_entity_registry_enabled_default = False
     _data_key: str  # Key in the room state dict (e.g. "current_temp")
 
     def __init__(

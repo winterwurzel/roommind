@@ -1,0 +1,33 @@
+description: Inverter split AC (heat/cool) with return-air sensor and own hysteresis.
+model: ac
+capabilities:
+  hvac_modes: ["off", "heat", "cool", "dry", "fan_only", "heat_cool"]
+  fan_modes: ["auto", "low", "medium", "high"]
+  min_temp: 16
+  max_temp: 30
+  target_temp_step: 1
+  unit: C
+params:
+  heat_capacity_w: 3500        # at 7 °C outdoor
+  heat_derate_per_k: 0.02      # capacity loss per K below 7 °C
+  cool_capacity_w: 3500
+  min_modulation: 0.3
+  kp: 0.6                      # modulation per K error
+  deadband_k: 0.5              # compressor off this far past the setpoint (on the device sensor)
+  restart_k: 0.5               # back on this far on the demand side
+  sensor_offset_heat_k: 1.5    # return-air sensor near the ceiling reads warmer while heating
+  sensor_offset_cool_k: 0.0
+  sensor_offset_idle_k: 0.0    # compressor stopped; a unit under the ceiling reads the warm layer once no air moves
+  sensor_offset_tau_s: 120     # offset builds up / fades over minutes, not at the compressor edge
+  internal_min_run_s: 180
+  min_off_s: 180               # restart delay after a stop (anti-short-cycle timer, 3 min in service manuals)
+  capacity_tau_s: 0            # output lag after start; real units 40-76 s (cycling tests), off by default (SplitAc)
+  cop_heat: [3.2, 0.06]        # cop = a + b * T_out
+  eer: 3.5
+  shr: 0.75                    # sensible heat ratio while cooling (rest dehumidifies)
+  radiant_fraction: 0.0
+  max_output: 1.0              # cap on the delivered share; ECO/quiet modes run far below the rating (~0.3-0.5)
+  defrost_interval_s: 2700     # shortest heating time between defrosts (humid air around 0 °C); 0 = never
+  defrost_s: 300               # reverse-cycle defrost, no heat to the room
+  defrost_action: heating      # what hvac_action shows meanwhile; most integrations do not report "defrosting"
+quirks: []

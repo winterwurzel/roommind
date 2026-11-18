@@ -1,0 +1,26 @@
+name: range-thermostat-proportional
+extends: homematic-duty-cycle
+description: >
+  A dual-setpoint thermostat that only offers auto, driven like a TRV with
+  proportional setpoints: the heating setpoint lands on target_temp_low. Like a single
+  setpoint it is resent at most once per MPC block (setpoint dwell, #317), not on every
+  sensor step.
+refs: [317]
+tags: [commands, dwell]
+house:
+  rooms:
+    schlafzimmer:
+      devices:
+        - {entity_id: climate.schlafzimmer_thermostat, profile: range_only_thermostat}
+roommind:
+  settings:
+    compressor_groups: []
+  rooms:
+    schlafzimmer:
+      devices: [{entity_id: climate.schlafzimmer_thermostat, type: trv}]
+expect:
+  - {invariant: no_rejected_commands}
+  - {invariant: setpoints_within_device_range}
+  - {metric: comfort.in_band_pct, room: schlafzimmer, min: 85}
+  # without the dwell the low setpoint followed every sensor step (19.3/h)
+  - {metric: device.commands_per_hour, entity_id: climate.schlafzimmer_thermostat, max: 16}

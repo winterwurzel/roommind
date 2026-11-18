@@ -1,0 +1,50 @@
+name: room-climate-entity
+description: >
+  The room climate entity (#238) driven like a thermostat card, an automation or a voice
+  assistant would: a set temperature and the eco preset hold until the next schedule change,
+  hvac mode off switches the device off and stops control, heat resumes it.
+refs: [238, 425]
+tags: [entities, override, schedule]
+start: 2026-01-12T00:00
+duration: 2d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    wohnzimmer:
+      floor_area_m2: 22
+      initial: {temperature: 19.0}
+      devices: [{entity_id: climate.wz_trv, profile: generic_trv}]
+      sensors: {temperature: {entity_id: sensor.wz_temp}}
+helpers:
+  schedule:
+    plan_wohnen: {weekdays: ["06:00-08:00", "16:30-22:30"], weekend: ["07:30-23:00"]}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_trv, type: trv, heating_system_type: radiator}]
+      temperature_sensor: sensor.wz_temp
+      climate_mode: heat_only
+      schedules: [{entity_id: schedule.plan_wohnen}]
+      comfort_temp: 21.0
+      eco_temp: 18.0
+timeline:
+  - {at: "+0d10h", do: ha.service, service: climate.set_temperature, data: {entity_id: climate.roommind_wohnzimmer, temperature: 22.5}}
+  - {at: "+0d23h", do: ha.service, service: climate.set_preset_mode, data: {entity_id: climate.roommind_wohnzimmer, preset_mode: comfort}}
+  - {at: "+1d16h", do: ha.service, service: climate.set_hvac_mode, data: {entity_id: climate.roommind_wohnzimmer, hvac_mode: "off"}}
+  - {at: "+1d19h", do: ha.service, service: climate.set_hvac_mode, data: {entity_id: climate.roommind_wohnzimmer, hvac_mode: heat}}
+expect:
+  - {check: "room.wohnzimmer.override_active == true and room.wohnzimmer.heat_target == 22.5", at: "+0d10h05m", label: set temperature holds}
+  - {check: "room.wohnzimmer.override_active == true", at: "+0d16h25m", label: hold lasts until the schedule changes}
+  - {check: "room.wohnzimmer.override_active == false and room.wohnzimmer.heat_target == 21.0", at: "+0d16h35m", label: schedule takes over at its next change}
+  - {check: "room.wohnzimmer.override_active == true and room.wohnzimmer.heat_target == 21.0", at: "+1d00h", label: comfort preset during the eco period}
+  - {check: "room.wohnzimmer.override_active == false and room.wohnzimmer.heat_target == 21.0", at: "+1d06h05m", label: comfort preset ends at the next block}
+  - {check: "room.wohnzimmer.heat_target == 18.0", at: "+1d08h30m", label: back on schedule after the block}
+  - {check: "dev('climate.wz_trv').mode == 'heat'", at: "+1d15h55m", label: heating before the comfort block}
+  - {check: "dev('climate.wz_trv').mode == 'off'", at: "+1d16h05m", label: hvac off switches the device off}
+  - {check: "dev('climate.wz_trv').mode == 'off' and true_temp('wohnzimmer') < 20.0", at: "+1d18h55m", label: device stays off through the comfort block}
+  - {check: "dev('climate.wz_trv').mode == 'heat'", at: "+1d19h10m", label: hvac heat resumes control}

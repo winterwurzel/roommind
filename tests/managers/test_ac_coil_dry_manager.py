@@ -500,6 +500,23 @@ async def test_unsupported_fan_mode_is_skipped(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fan_mode_is_matched_to_the_devices_spelling(monkeypatch):
+    """The default coil dry fan mode 'low' reaches a device that calls it 'Low'."""
+    import custom_components.roommind.managers.ac_coil_dry_manager as mod
+
+    now = [0.0]
+    monkeypatch.setattr(mod.time, "time", lambda: now[0])
+    hass = build_hass(fan_modes=["Auto", "Low", "High"], fan_mode="Auto")
+    mgr = AcCoilDryManager(hass)
+
+    await _wet(mgr, now)
+    calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_fan_mode"]
+    assert [c[0][2]["fan_mode"] for c in calls] == ["Low"]
+    # The device's name is kept, so the restore recognises the speed it set
+    assert mgr.state_for(AC_EID).fan_mode == "Low"
+
+
+@pytest.mark.asyncio
 async def test_drain_phase_reasserts_idle_each_cycle(monkeypatch):
     """Mid-drain (before phase_until), the device is held off again every cycle.
 
@@ -1126,3 +1143,64 @@ async def test_remove_room_drops_that_areas_entities(monkeypatch):
     assert mgr.state_for(AC_EID) is not None
     mgr.remove_room("living_room")
     assert mgr.state_for(AC_EID) is None
+
+
+HEATING_GROUP = {AC_EID: frozenset({"cool", "dry", "fan_only"})}
+
+
+@pytest.mark.asyncio
+async def test_no_run_while_the_uniform_group_heats(monkeypatch):
+    """A fan or dry blow would keep a shared outdoor unit from heating (#533)."""
+    import custom_components.roommind.managers.ac_coil_dry_manager as mod
+
+    now = [0.0]
+    monkeypatch.setattr(mod.time, "time", lambda: now[0])
+    mgr = AcCoilDryManager(build_hass())
+
+    await process(mgr, mode="cooling")
+    now[0] += 900.0
+    result = await mgr.async_process_room(
+        area_id="living_room",
+        room=make_room(),
+        settings=dict(ENABLED),
+        mode="idle",
+        commandable=True,
+        compressor_forced_on=set(),
+        compressor_forced_off=set(),
+        exclude_eids=set(),
+        force_off=False,
+        can_activate=lambda _eid: True,
+        group_conflicts=HEATING_GROUP,
+    )
+
+    assert mgr.state_for(AC_EID).phase is None
+    assert result.controlled_eids == set()
+
+
+@pytest.mark.asyncio
+async def test_running_blow_ends_when_the_uniform_group_turns_to_heat(monkeypatch):
+    import custom_components.roommind.managers.ac_coil_dry_manager as mod
+
+    now = [0.0]
+    monkeypatch.setattr(mod.time, "time", lambda: now[0])
+    mgr = AcCoilDryManager(build_hass())
+    await _wet(mgr, now)
+    assert mgr.state_for(AC_EID).phase == "blow"
+
+    now[0] += 60.0
+    result = await mgr.async_process_room(
+        area_id="living_room",
+        room=make_room(),
+        settings=dict(ENABLED),
+        mode="idle",
+        commandable=True,
+        compressor_forced_on=set(),
+        compressor_forced_off=set(),
+        exclude_eids=set(),
+        force_off=False,
+        can_activate=lambda _eid: True,
+        group_conflicts=HEATING_GROUP,
+    )
+
+    assert mgr.state_for(AC_EID).phase is None
+    assert result.controlled_eids == set()

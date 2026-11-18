@@ -6,8 +6,9 @@ import time
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
+from homeassistant.core import CoreState
 
-from custom_components.roommind.const import MODE_IDLE
+from custom_components.roommind.const import MAX_SENSOR_STALENESS, MODE_IDLE
 
 from .conftest import (
     SAMPLE_ROOM,
@@ -85,8 +86,8 @@ class TestRoomMindCoordinator:
         assert room_state["window_open"] is False
 
     @pytest.mark.asyncio
-    async def test_window_sensor_unavailable_treated_as_closed(self, hass, mock_config_entry):
-        """Test that an unavailable window sensor is treated as closed."""
+    async def test_window_sensor_unavailable_after_grace_treated_as_closed(self, hass, mock_config_entry):
+        """A sensor that stays unavailable past the grace period counts as closed again."""
         room_with_window = {
             **SAMPLE_ROOM,
             "window_sensors": ["binary_sensor.living_room_window"],
@@ -102,11 +103,209 @@ class TestRoomMindCoordinator:
         hass.services.async_call = AsyncMock()
 
         coordinator = _create_coordinator(hass, mock_config_entry)
-        data = await coordinator._async_update_data()
+        with patch("custom_components.roommind.managers.window_manager.time") as mock_time:
+            mock_time.time.return_value = 1000.0
+            await coordinator._async_update_data()
+            mock_time.time.return_value = 1000.0 + MAX_SENSOR_STALENESS + 1
+            data = await coordinator._async_update_data()
 
         room_state = data["rooms"]["living_room_abc12345"]
         assert room_state["window_open"] is False
         assert room_state["mode"] == "heating"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", ["unavailable", "unknown", None])
+    async def test_window_sensor_unavailable_at_startup_holds_commands(self, hass, mock_config_entry, state):
+        """Right after startup an unavailable sensor must not count as closed: no device commands."""
+        room_with_window = {
+            **SAMPLE_ROOM,
+            "window_sensors": ["binary_sensor.living_room_window"],
+            "window_open_delay": 60,
+        }
+        store = _make_store_mock({"living_room_abc12345": room_with_window})
+        hass.data = {"roommind": {"store": store}}
+
+        base = make_mock_states_get(window_sensors={"binary_sensor.living_room_window": state or "on"})
+
+        def _states(entity_id):
+            if entity_id == "binary_sensor.living_room_window" and state is None:
+                return None
+            return base(entity_id)
+
+        hass.states.get = MagicMock(side_effect=_states)
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        data = await coordinator._async_update_data()
+
+        room_state = data["rooms"]["living_room_abc12345"]
+        assert room_state["mode"] == "idle"
+        climate_calls = [c for c in hass.services.async_call.call_args_list if c.args[0] == "climate"]
+        assert climate_calls == []
+
+    @pytest.mark.asyncio
+    async def test_window_open_right_after_unavailable_skips_open_delay(self, hass, mock_config_entry):
+        """The unavailable cycle must not consume the first observation: open pauses at once despite open_delay."""
+        room_with_window = {
+            **SAMPLE_ROOM,
+            "window_sensors": ["binary_sensor.living_room_window"],
+            "window_open_delay": 60,
+        }
+        store = _make_store_mock({"living_room_abc12345": room_with_window})
+        hass.data = {"roommind": {"store": store}}
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(window_sensors={"binary_sensor.living_room_window": "unavailable"})
+        )
+        await coordinator._async_update_data()
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(window_sensors={"binary_sensor.living_room_window": "on"})
+        )
+        data = await coordinator._async_update_data()
+
+        room_state = data["rooms"]["living_room_abc12345"]
+        assert room_state["window_open"] is True
+        assert room_state["mode"] == "idle"
+
+    @pytest.mark.asyncio
+    async def test_window_sensor_unavailable_keeps_open_state(self, hass, mock_config_entry):
+        """A sensor that drops out while the window is open keeps the pause."""
+        room_with_window = {
+            **SAMPLE_ROOM,
+            "window_sensors": ["binary_sensor.living_room_window"],
+        }
+        store = _make_store_mock({"living_room_abc12345": room_with_window})
+        hass.data = {"roommind": {"store": store}}
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(window_sensors={"binary_sensor.living_room_window": "on"})
+        )
+        await coordinator._async_update_data()
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(window_sensors={"binary_sensor.living_room_window": "unavailable"})
+        )
+        data = await coordinator._async_update_data()
+
+        assert data["rooms"]["living_room_abc12345"]["window_open"] is True
+
+    @staticmethod
+    def _climate_calls(hass):
+        return [c for c in hass.services.async_call.call_args_list if c.args[0] == "climate"]
+
+    @staticmethod
+    async def _tick_with_stateless_sensor(request, hass, mock_config_entry, core_state, registered):
+        room_with_window = {
+            **SAMPLE_ROOM,
+            "window_sensors": ["binary_sensor.living_room_window"],
+            "window_open_delay": 60,
+        }
+        store = _make_store_mock({"living_room_abc12345": room_with_window})
+        hass.data = {"roommind": {"store": store}}
+        hass.state = core_state
+        hass.services.async_call = AsyncMock()
+        hass.states.get = MagicMock(side_effect=make_mock_states_get())
+        registry = MagicMock()
+        registry.async_get = MagicMock(return_value=MagicMock() if registered else None)
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        patcher = patch("homeassistant.helpers.entity_registry.async_get", return_value=registry)
+        patcher.start()
+        request.addfinalizer(patcher.stop)
+        data = await coordinator._async_update_data()
+        return data["rooms"]["living_room_abc12345"], coordinator
+
+    @pytest.mark.asyncio
+    async def test_deleted_window_sensor_after_startup_counts_as_closed(self, request, hass, mock_config_entry):
+        """No state and no registry entry once HA runs: closed at once, the room keeps heating (#437)."""
+        room_state, coordinator = await self._tick_with_stateless_sensor(
+            request, hass, mock_config_entry, CoreState.running, registered=False
+        )
+        assert room_state["mode"] == "heating"
+        assert room_state["window_open"] is False
+        assert coordinator._window_manager.is_pending("living_room_abc12345") is False
+        assert self._climate_calls(hass) != []
+
+    @pytest.mark.asyncio
+    async def test_missing_window_sensor_while_ha_starts_stays_pending(self, request, hass, mock_config_entry):
+        """Entities may still be loading while HA starts: keep the pending behaviour."""
+        room_state, coordinator = await self._tick_with_stateless_sensor(
+            request, hass, mock_config_entry, CoreState.starting, registered=False
+        )
+        assert room_state["mode"] == "idle"
+        assert coordinator._window_manager.is_pending("living_room_abc12345") is True
+        assert self._climate_calls(hass) == []
+
+    @pytest.mark.asyncio
+    async def test_registered_window_sensor_without_state_stays_pending(self, request, hass, mock_config_entry):
+        """The entity exists (registry entry), only its state is missing: wait for the staleness cap."""
+        room_state, coordinator = await self._tick_with_stateless_sensor(
+            request, hass, mock_config_entry, CoreState.running, registered=True
+        )
+        assert room_state["mode"] == "idle"
+        assert coordinator._window_manager.is_pending("living_room_abc12345") is True
+        assert self._climate_calls(hass) == []
+
+    @pytest.mark.asyncio
+    async def test_registered_window_sensor_without_state_expires_after_cap(self, request, hass, mock_config_entry):
+        room_state, coordinator = await self._tick_with_stateless_sensor(
+            request, hass, mock_config_entry, CoreState.running, registered=True
+        )
+        with patch("custom_components.roommind.managers.window_manager.time") as mock_time:
+            mock_time.time.return_value = time.time() + MAX_SENSOR_STALENESS + 1
+            data = await coordinator._async_update_data()
+        assert coordinator._window_manager.is_pending("living_room_abc12345") is False
+        assert data["rooms"]["living_room_abc12345"]["window_open"] is False
+
+    @pytest.mark.asyncio
+    async def test_window_pending_skips_ekf_training(self, hass, mock_config_entry):
+        """While the window state is unresolved, EKF training is skipped (flushed), not run as idle."""
+        room_with_window = {
+            **SAMPLE_ROOM,
+            "window_sensors": ["binary_sensor.living_room_window"],
+        }
+        store = _make_store_mock({"living_room_abc12345": room_with_window})
+        hass.data = {"roommind": {"store": store}}
+        hass.services.async_call = AsyncMock()
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(window_sensors={"binary_sensor.living_room_window": "unavailable"})
+        )
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        with patch.object(coordinator._ekf_training, "process") as process:
+            await coordinator._async_update_data()
+
+        assert process.call_args_list
+        for c in process.call_args_list:
+            assert c.kwargs["raw_open"] is True
+            assert c.kwargs["window_open"] is False
+
+    @pytest.mark.asyncio
+    async def test_window_pending_reports_idle_to_downstream_managers(self, hass, mock_config_entry):
+        """Managers running before the device-control branch must see idle, not the controller's heating decision."""
+        room_with_window = {
+            **SAMPLE_ROOM,
+            "window_sensors": ["binary_sensor.living_room_window"],
+        }
+        store = _make_store_mock({"living_room_abc12345": room_with_window})
+        hass.data = {"roommind": {"store": store}}
+        hass.services.async_call = AsyncMock()
+        hass.states.get = MagicMock(
+            side_effect=make_mock_states_get(window_sensors={"binary_sensor.living_room_window": "unavailable"})
+        )
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        manager = coordinator._coil_dry_manager
+        with patch.object(manager, "async_process_room", wraps=manager.async_process_room) as process_room:
+            await coordinator._async_update_data()
+
+        assert process_room.await_args.kwargs["mode"] == MODE_IDLE
+        assert process_room.await_args.kwargs["commandable"] is False
 
     @pytest.mark.asyncio
     async def test_no_window_sensors_normal_operation(self, hass, mock_config_entry):
@@ -387,11 +586,13 @@ class TestRoomMindCoordinator:
             wraps=coordinator._model_manager.update_window_open,
         ) as mock_win_update:
             await coordinator._async_update_data()
+            await coordinator._async_update_data()
 
-        # k_window should be learned (no residual heat, no delay)
-        mock_win_update.assert_called_once()
-        _, kwargs = mock_win_update.call_args
-        assert kwargs.get("learn_k_window") is True
+        # k_window should be learned (no residual heat, no delay); the first cycle after
+        # start only takes over the temperature, the stored one may be hours old (#478)
+        assert mock_win_update.call_count == 2
+        assert mock_win_update.call_args_list[0].kwargs.get("learn_k_window") is False
+        assert mock_win_update.call_args.kwargs.get("learn_k_window") is True
 
     @pytest.mark.asyncio
     async def test_zero_delays_instant_behavior(self, hass, mock_config_entry):
@@ -489,3 +690,45 @@ class TestRoomMindCoordinator:
         assert area_id not in coordinator._window_manager._closed_since
         assert area_id not in coordinator._window_manager._paused
         assert area_id not in coordinator._window_manager._seen
+
+
+class TestCoverWindowHold:
+    """The cover hold (#268) sees the raw window state, not the delayed climate pause."""
+
+    async def _cover_window_flag(self, hass, mock_config_entry, window_state, *, seen=True):
+        room = {
+            **SAMPLE_ROOM,
+            "window_sensors": ["binary_sensor.living_room_window"],
+            "window_open_delay": 120,
+            "covers": ["cover.living_room"],
+        }
+        store = _make_store_mock({"living_room_abc12345": room})
+        hass.data = {"roommind": {"store": store}}
+        base = make_mock_states_get(window_sensors={"binary_sensor.living_room_window": window_state})
+        hass.states.get = MagicMock(side_effect=base)
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        if seen:
+            coordinator._window_manager._seen.add("living_room_abc12345")
+        with patch.object(
+            coordinator._cover_orchestrator, "async_process", wraps=coordinator._cover_orchestrator.async_process
+        ) as process:
+            data = await coordinator._async_update_data()
+        return data["rooms"]["living_room_abc12345"], process.call_args.kwargs["window_open"]
+
+    @pytest.mark.asyncio
+    async def test_open_window_reaches_covers_before_the_open_delay(self, hass, mock_config_entry):
+        room_state, flag = await self._cover_window_flag(hass, mock_config_entry, "on")
+        assert room_state["window_open"] is False  # climate pause still waits for the delay
+        assert flag is True
+
+    @pytest.mark.asyncio
+    async def test_closed_window_releases_covers(self, hass, mock_config_entry):
+        _, flag = await self._cover_window_flag(hass, mock_config_entry, "off")
+        assert flag is False
+
+    @pytest.mark.asyncio
+    async def test_pending_window_counts_as_open_for_covers(self, hass, mock_config_entry):
+        _, flag = await self._cover_window_flag(hass, mock_config_entry, "unavailable", seen=False)
+        assert flag is True

@@ -1,0 +1,45 @@
+name: ac-direct-warm-head-cooling
+description: >
+  Tropical days, a split AC with setpoint_mode direct mounted under the ceiling: its own
+  sensor reads 1 K above the room sensor, so it keeps cooling well past the target it
+  gets. RoomMind lets a direct unit end its own run (ac-direct-own-run), but only up to
+  0.5 K past the target; without that limit this unit ran every run down to the hard
+  ceiling, 1 K below the target.
+refs: [419]
+tags: [ac, control]
+start: 2026-09-01T00:00
+duration: 3d
+location: {latitude: 13.7, longitude: 100.5, time_zone: Asia/Bangkok}
+weather: {profile: subtropical-humid}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    schlafzimmer:
+      floor_area_m2: 16
+      initial: {temperature: 26.0, mass_temperature: 26.0}
+      windows: [{orientation: W, area_m2: 3}]
+      devices:
+        - {entity_id: climate.sz_ac, profile: generic_split_ac, cool_capacity_w: 1500, sensor_offset_cool_k: 1.0, sensor_offset_idle_k: 1.0}
+      sensors: {temperature: {entity_id: sensor.sz_temp}}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    weather_entity: weather.simhome
+    control_mode: mpc
+    outdoor_cooling_min: 20
+  rooms:
+    schlafzimmer:
+      devices: [{entity_id: climate.sz_ac, type: ac, setpoint_mode: direct, idle_action: "off"}]
+      temperature_sensor: sensor.sz_temp
+      climate_mode: cool_only
+      comfort_temp: 24.0
+      eco_temp: 24.0
+expect:
+  - {invariant: target_never_empty}
+  - {invariant: no_rejected_commands}
+  # cool_only mirrors the target onto the heat side, so undershoot is cooling past the target.
+  # Seed 1: v1.8.0 17.3 Kh / 77.6 % in band / 171 starts; 0.5 K limit 18.1 / 78.2 / 143;
+  # run continued to the hard ceiling (1 K) 30.0 / 51.2 / 27, energy +5 %.
+  - {metric: comfort.undershoot_kh, room: schlafzimmer, max: 23, label: a warm-reading unit stops half a degree past the target}
+  - {metric: comfort.in_band_pct, room: schlafzimmer, min: 70}

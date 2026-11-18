@@ -299,3 +299,42 @@ def test_remove_room_clears_all_dicts():
     assert "room2" in tracker._off_since
     assert "room2" in tracker._off_power
     assert "room2" in tracker._on_since
+
+
+# ---------------------------------------------------------------------------
+# AcReboundTracker
+# ---------------------------------------------------------------------------
+
+
+def test_rebound_charge_rises_while_cooling_and_decays_after():
+    from custom_components.roommind.const import AC_REBOUND_TAU_MINUTES, MODE_COOLING
+    from custom_components.roommind.managers.residual_heat_tracker import AcReboundTracker
+
+    tracker = AcReboundTracker()
+    path = "custom_components.roommind.managers.residual_heat_tracker.time.time"
+    tau_s = AC_REBOUND_TAU_MINUTES * 60
+    with patch(path, return_value=1000.0):
+        assert tracker.get_charge("room1") == 0.0
+        tracker.update("room1", MODE_COOLING)
+    with patch(path, return_value=1000.0 + tau_s):
+        charged = tracker.get_charge("room1")
+        assert charged == pytest.approx(1.0 - math.exp(-1.0))
+        tracker.update("room1", MODE_IDLE)
+    with patch(path, return_value=1000.0 + 2 * tau_s):
+        assert tracker.get_charge("room1") == pytest.approx(charged * math.exp(-1.0))
+    with patch(path, return_value=1000.0 + 30 * tau_s):
+        tracker.update("room1", None)
+    assert "room1" not in tracker._at
+
+
+def test_rebound_tracker_remove_and_clear():
+    from custom_components.roommind.const import MODE_COOLING
+    from custom_components.roommind.managers.residual_heat_tracker import AcReboundTracker
+
+    tracker = AcReboundTracker()
+    tracker.update("a", MODE_COOLING)
+    tracker.update("b", MODE_COOLING)
+    tracker.remove_room("a")
+    assert "a" not in tracker._at and "b" in tracker._at
+    tracker.clear_all()
+    assert not tracker._at and not tracker._charge and not tracker._cooling

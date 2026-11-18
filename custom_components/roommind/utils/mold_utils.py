@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 
 from ..const import (
-    MIN_MOLD_GROWTH_TEMP,
+    DEFAULT_MOLD_F_RSI,
     MOLD_PREVENTION_DELTAS,
     MOLD_RISK_CRITICAL,
     MOLD_RISK_OK,
@@ -61,7 +61,7 @@ def surface_rh(t_dew: float, t_surface: float) -> float:
 def estimate_surface_temp(
     t_room: float,
     t_outdoor: float,
-    f_rsi: float = 0.80,
+    f_rsi: float = DEFAULT_MOLD_F_RSI,
 ) -> float:
     """Estimate coldest wall surface temperature using temperature factor.
 
@@ -83,8 +83,9 @@ def calculate_mold_risk(
     t_room: float,
     rh_room: float,
     t_outdoor: float | None,
-) -> tuple[str, float]:
-    """Calculate mold risk level and estimated surface RH.
+    f_rsi: float = DEFAULT_MOLD_F_RSI,
+) -> tuple[str, float, float | None]:
+    """Calculate mold risk level, estimated surface RH, and surface temperature.
 
     Uses the full dew-point / surface-temperature method when *t_outdoor* is
     available, otherwise falls back to a conservative room-air-RH assessment.
@@ -93,18 +94,17 @@ def calculate_mold_risk(
         t_room: Indoor air temperature in °C.
         rh_room: Indoor relative humidity in % (0-100).
         t_outdoor: Outdoor temperature in °C, or None if unavailable.
+        f_rsi: Temperature factor per DIN 4108-2 (0-1). Higher = better insulated.
 
     Returns:
-        Tuple of (risk_level, surface_rh_percent).
+        Tuple of (risk_level, surface_rh_percent, surface_temp_celsius).
         risk_level is one of MOLD_RISK_OK / MOLD_RISK_WARNING / MOLD_RISK_CRITICAL.
+        surface_temp is None when t_outdoor is unavailable.
     """
     if t_outdoor is not None:
-        t_surface = estimate_surface_temp(t_room, t_outdoor)
-
-        # Below MIN_MOLD_GROWTH_TEMP mold growth is negligible
-        if t_surface < MIN_MOLD_GROWTH_TEMP:
-            return MOLD_RISK_OK, 0.0
-
+        # No lower temperature cut-off: a wall below 5 °C grows mold slowly, but it is
+        # where condensate forms first, and the mold grows once the wall warms up again
+        t_surface = estimate_surface_temp(t_room, t_outdoor, f_rsi=f_rsi)
         t_dew = dew_point(t_room, rh_room)
         srh = surface_rh(t_dew, t_surface)
     else:
@@ -112,8 +112,9 @@ def calculate_mold_risk(
         # Typical wall surface is 3-5 °C colder → surface RH is ~10-15 % higher
         # than room air RH.  We approximate by shifting thresholds down.
         srh = rh_room + 10.0  # conservative estimate
+        t_surface = None
 
-    return _risk_from_surface_rh(srh), round(srh, 1)
+    return _risk_from_surface_rh(srh), round(srh, 1), (round(t_surface, 1) if t_surface is not None else None)
 
 
 def _risk_from_surface_rh(srh: float) -> str:

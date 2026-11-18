@@ -6,6 +6,7 @@ import { RsSettingsBase } from "./rs-settings-base";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types";
 import { localize } from "../../utils/localize";
+import { hasFloors } from "../../utils/dashboard";
 
 @customElement("rs-settings-general")
 export class RsSettingsGeneral extends RsSettingsBase {
@@ -15,42 +16,31 @@ export class RsSettingsGeneral extends RsSettingsBase {
 
   render() {
     const l = this.hass.language;
-
     return html`
+      <div class="settings-section first">
+        <rs-list-row
+          switch
+          wrap
+          .heading=${localize("settings.climate_control_active", l)}
+          .secondary=${localize("settings.climate_control_hint", l)}
+          .checked=${this.climateControlActive}
+          @toggle-changed=${(e: CustomEvent<boolean>) =>
+            this._fire("climateControlActive", e.detail)}
+        ></rs-list-row>
+      </div>
       ${
-        this.hass.floors && Object.keys(this.hass.floors).length > 0
-          ? html`<div class="settings-section first">
-              <div class="toggle-row">
-                <div class="toggle-text">
-                  <span class="toggle-label">${localize("settings.group_by_floor", l)}</span>
-                </div>
-                <ha-switch
-                  .checked=${this.groupByFloor}
-                  @change=${(e: Event) =>
-                    this._fire("groupByFloor", (e.target as HTMLInputElement).checked)}
-                ></ha-switch>
-              </div>
+        hasFloors(this.hass)
+          ? html`<div class="settings-section">
+              <rs-list-row
+                switch
+                wrap
+                .heading=${localize("settings.group_by_floor", l)}
+                .checked=${this.groupByFloor}
+                @toggle-changed=${(e: CustomEvent<boolean>) => this._fire("groupByFloor", e.detail)}
+              ></rs-list-row>
             </div>`
           : nothing
       }
-
-      <div
-        class="settings-section ${
-          this.hass.floors && Object.keys(this.hass.floors).length > 0 ? "" : "first"
-        }"
-      >
-        <div class="toggle-row">
-          <div class="toggle-text">
-            <span class="toggle-label">${localize("settings.climate_control_active", l)}</span>
-            <span class="toggle-hint">${localize("settings.climate_control_hint", l)}</span>
-          </div>
-          <ha-switch
-            .checked=${this.climateControlActive}
-            @change=${(e: Event) =>
-              this._fire("climateControlActive", (e.target as HTMLInputElement).checked)}
-          ></ha-switch>
-        </div>
-      </div>
     `;
   }
 

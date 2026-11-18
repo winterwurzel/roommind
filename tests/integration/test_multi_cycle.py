@@ -43,6 +43,29 @@ class TestMultiCycle:
         assert mode2 == "idle"
 
     @pytest.mark.asyncio
+    async def test_idle_start_tracked_across_cycles(self, coordinator, real_store):
+        """The idle start survives further idle cycles and is dropped by a run (#255 setback hold)."""
+        await setup_room(real_store)
+
+        coordinator.hass.states.get = MagicMock(side_effect=make_hass_states(temp="18.0"))
+        await coordinator._async_update_data()
+        assert coordinator._previous_modes["living_room"] == "heating"
+        assert "living_room" not in coordinator._idle_since
+
+        coordinator._mode_on_since["living_room"] -= 4000
+        coordinator.hass.states.get = MagicMock(side_effect=make_hass_states(temp="21.5"))
+        await coordinator._async_update_data()
+        assert coordinator._previous_modes["living_room"] == "idle"
+        idle_since = coordinator._idle_since["living_room"]
+
+        await coordinator._async_update_data()
+        assert coordinator._idle_since["living_room"] == idle_since
+
+        coordinator.hass.states.get = MagicMock(side_effect=make_hass_states(temp="18.0"))
+        await coordinator._async_update_data()
+        assert "living_room" not in coordinator._idle_since
+
+    @pytest.mark.asyncio
     async def test_previous_mode_tracked_across_cycles(self, coordinator, real_store):
         """Coordinator should track previous mode for residual heat and transitions."""
         await setup_room(real_store)

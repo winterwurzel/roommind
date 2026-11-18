@@ -1,0 +1,41 @@
+name: ir-ac-no-feedback
+description: >
+  IR-controlled split AC without state feedback. Every frame beeps, so RoomMind must
+  not resend unchanged commands (#416, #298).
+refs: [416, 298]
+tags: [ac, commands]
+start: 2026-01-12T00:00
+duration: 2d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    wohnzimmer:
+      floor_area_m2: 24
+      initial: {temperature: 19.0}
+      windows: [{orientation: S, area_m2: 3}]
+      devices: [{entity_id: climate.wz_ir_ac, profile: broadlink_ir_ac}]
+      sensors: {temperature: {entity_id: sensor.wz_temp}}
+helpers:
+  schedule:
+    tag: {daily: ["06:30-22:30"]}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    control_mode: mpc
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_ir_ac, type: ac}]
+      temperature_sensor: sensor.wz_temp
+      climate_mode: heat_only
+      schedules: [{entity_id: schedule.tag}]
+      comfort_temp: 21.0
+      eco_temp: 18.0
+expect:
+  - {metric: device.commands_per_hour, entity_id: climate.wz_ir_ac, max: 3, known_failure: 'candidate: the 30 s heat/idle toggling is fixed (45 -> ~12 cmds/h); what remains are on/off cycles of ~20 min (4 IR frames each, the AC heats its air node within minutes and it drops back right after a stop), proportional setpoint steps during a run, and bang-bang restarts shortly after a stop while the model is still learning (first morning)'}
+  - {metric: device.redundant_commands, entity_id: climate.wz_ir_ac, max: 0}
+  - {metric: device.commanded_runs, entity_id: climate.wz_ir_ac, max: 150, label: no heat/idle toggle every cycle (543 runs before the fix)}
+  - {metric: device.commands_per_hour, entity_id: climate.wz_ir_ac, max: 15, label: command rate without the 30 s toggle (45/h before the fix)}
+  - {invariant: max_commands_per_hour, entity_id: climate.wz_ir_ac, limit: 10, known_failure: 'candidate: the 30 s heat/idle toggling is fixed (45 -> ~12 cmds/h); what remains are on/off cycles of ~20 min (4 IR frames each, the AC heats its air node within minutes and it drops back right after a stop), proportional setpoint steps during a run, and bang-bang restarts shortly after a stop while the model is still learning (first morning)'}

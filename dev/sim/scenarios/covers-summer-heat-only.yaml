@@ -1,0 +1,31 @@
+name: covers-summer-heat-only
+extends: covers-solar-south
+description: >
+  The south room of covers-solar-south without any cooling, in a mild June week: a
+  heat-only TRV room. Shading protects the comfort ceiling (comfort_cool), not the
+  heating setpoint (#418), so the blind may only close once the sun would push the
+  room past that ceiling.
+refs: [418]
+tags: [covers, solar, trv]
+start: 2026-06-15T00:00
+duration: 5d
+weather: {profile: temperate}
+house:
+  rooms:
+    wohnzimmer:
+      initial: {temperature: 22.0, mass_temperature: 22.0}
+      windows: [{orientation: S, area_m2: 2.5, g_value: 0.6}]
+      devices: [{entity_id: climate.wz_trv, profile: generic_trv}]
+roommind:
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_trv, type: trv, heating_system_type: radiator}]
+      climate_mode: heat_only
+      comfort_temp: 21.0
+      eco_temp: 18.0
+timeline: []
+expect:
+  - {invariant: no_rejected_commands}
+  # day 1 stays open on every version: no learned model yet, and the 1 h linear estimate stays below the threshold
+  - {metric: cover.sunny_days_unshaded, entity_id: cover.wohnzimmer_raffstore, max: 1, label: shades on sunny afternoons}
+  - {metric: cover.max_commands_per_day, entity_id: cover.wohnzimmer_raffstore, max: 6, label: few moves per day}

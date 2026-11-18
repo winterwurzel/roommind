@@ -1,0 +1,28 @@
+name: restart-mid-run
+extends: restart-resume
+description: >
+  Restarts and integration reloads every few hours, so several land in the middle of
+  a heating run. The previous mode lives in memory only; a run inside the start
+  hysteresis band (20.9 at 21) used to be switched off once after every restart.
+refs: [437]
+tags: [infra, trv]
+duration: 2d
+timeline:
+  - {at: "+0d04h07m", do: ha.restart}
+  - {at: "+0d07h14m", do: roommind.reload}
+  - {at: "+0d10h21m", do: ha.restart}
+  - {at: "+0d13h28m", do: roommind.reload}
+  - {at: "+0d16h35m", do: ha.restart}
+  - {at: "+0d19h42m", do: roommind.reload}
+  - {at: "+0d22h49m", do: ha.restart}
+  - {at: "+1d01h56m", do: roommind.reload}
+  - {at: "+1d04h03m", do: ha.restart}
+  - {at: "+1d07h10m", do: roommind.reload}
+  - {at: "+1d10h17m", do: ha.restart}
+  - {at: "+1d13h24m", do: roommind.reload}
+  - {at: "+1d16h31m", do: ha.restart}
+  - {at: "+1d19h38m", do: roommind.reload}
+  - {at: "+1d22h45m", do: ha.restart}
+expect:
+  - {invariant: target_never_empty}
+  - {invariant: no_rejected_commands}

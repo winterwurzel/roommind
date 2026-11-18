@@ -1,0 +1,41 @@
+name: multisplit-setback-release
+extends: multisplit-compressor
+description: >
+  Multi-split heating with idle action "setback" and "Turn off after an hour without
+  demand" on every indoor unit. Setback then only bridges short pauses: when the MPC
+  plan expects no heating for an hour (evening cool-down into the eco block), the unit
+  is switched off instead of staying in heat at the setback target all night (#255, #87).
+refs: [255, 87]
+tags: [compressor, ac, idle]
+roommind:
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_split, type: ac, idle_action: setback, setback_auto_off: true}]
+    schlafzimmer:
+      devices: [{entity_id: climate.sz_split, type: ac, idle_action: setback, setback_auto_off: true}]
+    buero:
+      devices: [{entity_id: climate.buero_split, type: ac, idle_action: setback, setback_auto_off: true}]
+expect:
+  - {invariant: min_run_commanded}
+  - {invariant: min_run_hold_keeps_setpoint}
+  - {invariant: no_heat_and_cool_same_group}
+  - {invariant: no_rejected_commands}
+  # v1.7.9 kept every unit in heat at the setback target all night. Without a plan (room not
+  # yet on MPC in the first night) the setback stays as before; by the second night all rooms plan.
+  - {check: "dev('climate.wz_split').mode == 'off' or not room.wohnzimmer.mpc_active", at: "+1d01h", label: wohnzimmer unit off in the first night}
+  - {check: "dev('climate.sz_split').mode == 'off' or not room.schlafzimmer.mpc_active", at: "+1d01h", label: schlafzimmer unit off in the first night}
+  - {check: "dev('climate.buero_split').mode == 'off' or not room.buero.mpc_active", at: "+1d01h", label: buero unit off in the first night}
+  - {check: "dev('climate.wz_split').mode == 'off' or not room.wohnzimmer.mpc_active", at: "+1d03h", label: wohnzimmer unit off in the first night}
+  - {check: "dev('climate.sz_split').mode == 'off' or not room.schlafzimmer.mpc_active", at: "+1d03h", label: schlafzimmer unit off in the first night}
+  - {check: "dev('climate.buero_split').mode == 'off' or not room.buero.mpc_active", at: "+1d03h", label: buero unit off in the first night}
+  - {check: "dev('climate.wz_split').mode == 'off'", at: "+2d01h", label: wohnzimmer unit off in the second night}
+  - {check: "dev('climate.sz_split').mode == 'off'", at: "+2d01h", label: schlafzimmer unit off in the second night}
+  - {check: "dev('climate.buero_split').mode == 'off'", at: "+2d01h", label: buero unit off in the second night}
+  - {check: "dev('climate.wz_split').mode == 'off'", at: "+2d03h", label: wohnzimmer unit off in the second night}
+  - {check: "dev('climate.sz_split').mode == 'off'", at: "+2d03h", label: schlafzimmer unit off in the second night}
+  - {check: "dev('climate.buero_split').mode == 'off'", at: "+2d03h", label: buero unit off in the second night}
+  # Releasing on the plan alone switched units off in 15-30 min pauses: 12.3 / 7.6 commands/h
+  # for sz / buero (v1.7.9: 6.8-7.5 / 4.7-5.1 over seeds 1-3)
+  - {metric: device.commands_per_hour, entity_id: climate.sz_split, max: 9.5, label: no off/on cycling in short pauses}
+  - {metric: device.commands_per_hour, entity_id: climate.buero_split, max: 6.5, label: no off/on cycling in short pauses}
+  - {metric: comfort.in_band_pct, room: schlafzimmer, min: 98, label: restarting from off still reaches the comfort block}

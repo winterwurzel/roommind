@@ -1,0 +1,52 @@
+name: room-climate-entity-auto-ac
+description: >
+  Room climate entity (#238) on an auto room with a heat pump AC in a compressor group: a bare
+  temperature (voice assistant) widens to a band, a wall display echoing the band in force sets
+  no override, turn_off switches the AC off and turn_on resumes without changing the climate mode.
+refs: [238, 425]
+tags: [entities, override, ac]
+start: 2026-01-12T00:00
+duration: 2d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    wohnzimmer:
+      floor_area_m2: 25
+      initial: {temperature: 19.0}
+      devices: [{entity_id: climate.wohnzimmer_ac, profile: generic_split_ac}]
+      sensors: {temperature: {entity_id: sensor.wohnzimmer_temp}}
+helpers:
+  schedule:
+    wohnzimmer_plan: {daily: ["06:00-22:00"]}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    compressor_groups:
+      - {id: g1, name: Aussengeraet, members: [climate.wohnzimmer_ac], min_run_minutes: 15, min_off_minutes: 5}
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wohnzimmer_ac, type: ac}]
+      temperature_sensor: sensor.wohnzimmer_temp
+      climate_mode: auto
+      schedules: [{entity_id: schedule.wohnzimmer_plan}]
+      comfort_heat: 21.0
+      comfort_cool: 24.0
+      eco_heat: 18.0
+      eco_cool: 27.0
+timeline:
+  - {at: "+0d10h", do: ha.service, service: climate.set_temperature, data: {entity_id: climate.roommind_wohnzimmer, temperature: 22.5}}
+  - {at: "+0d23h", do: ha.service, service: climate.set_temperature, data: {entity_id: climate.roommind_wohnzimmer, target_temp_low: 18.0, target_temp_high: 27.0}}
+  - {at: "+1d12h", do: ha.service, service: climate.turn_off, data: {entity_id: climate.roommind_wohnzimmer}}
+  - {at: "+1d15h", do: ha.service, service: climate.turn_on, data: {entity_id: climate.roommind_wohnzimmer}}
+expect:
+  - {invariant: min_off_respected}
+  - {check: "room.wohnzimmer.override_active == true and room.wohnzimmer.heat_target == 22.5 and room.wohnzimmer.cool_target == 24.0", at: "+0d10h05m", label: bare temperature widens to a band}
+  - {check: "room.wohnzimmer.override_active == false and room.wohnzimmer.heat_target == 18.0", at: "+0d22h05m", label: hold ends at the schedule change}
+  - {check: "room.wohnzimmer.override_active == false", at: "+0d23h05m", label: echo of the band in force sets no override}
+  - {check: "dev('climate.wohnzimmer_ac').mode == 'off'", at: "+1d12h05m", label: turn_off switches the AC off}
+  - {check: "dev('climate.wohnzimmer_ac').mode == 'off' and true_temp('wohnzimmer') < 20.6", at: "+1d14h55m", label: AC stays off while the room is off}
+  - {check: "dev('climate.wohnzimmer_ac').mode == 'heat'", at: "+1d15h05m", label: turn_on resumes control}
+  - {check: "room.wohnzimmer.heat_target == 21.0 and room.wohnzimmer.cool_target == 24.0", at: "+1d15h30m", label: climate mode stays auto}

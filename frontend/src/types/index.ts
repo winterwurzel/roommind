@@ -43,24 +43,51 @@ export interface RoomLiveData {
   confidence: number | null;
   mpc_active: boolean;
   presence_away: boolean;
+  occupancy_vacant?: boolean;
+  /** Air quality readings (#267), null without sensor or reading. */
+  co2?: number | null;
+  voc?: number | null;
+  air_quality_bad?: boolean;
+  air_quality_reason?: "co2" | "voc" | null;
+  /** RoomMind runs the room's ventilation entity for bad air. */
+  ventilation_active?: boolean;
   mold_risk_level: "ok" | "warning" | "critical";
   mold_surface_rh: number | null;
+  mold_surface_temp: number | null;
   mold_prevention_active: boolean;
+  /** Applied electricity price shift per side (K), 0 when none. */
+  price_shift_heat?: number;
+  price_shift_cool?: number;
+  price_level?: "cheap" | "normal" | "expensive" | null;
+  /** Stricter target a running pre-heat (pre-cool) aims at and when it starts (Unix s). */
+  preheat?: { mode: "heating" | "cooling"; target: number; at: number } | null;
+  /** Devices kept on at their setback target while the room is idle; `until` = earliest switch-off (Unix s). */
+  setback?: { devices: string[]; until: number | null } | null;
   mold_prevention_delta: number;
   blind_position: number | null;
   cover_auto_paused: boolean;
   cover_override_until?: number | null;
   cover_forced_reason: string;
+  cover_reason?: string;
   active_cover_schedule_index: number;
   active_heat_sources: string | null;
   learning_paused_reason: "outdoor_unavailable" | null;
+  /** Model updates so far (one per ~3 min of learning). */
+  n_observations?: number;
+  /** `n_observations` when "learn faster" was last used, null if never (counts the fade). */
+  boost_applied_at?: number | null;
   compressor_protection_active: boolean;
-  compressor_protection_reason: "min_off" | "min_run" | null;
+  compressor_protection_reason: "min_off" | "min_run" | "uniform_mode" | null;
+  /** While its "All in the same mode" group holds the room: the way the group runs or turns to. */
+  uniform_group_mode?: "heat" | "cool" | null;
+  compressor_protection_until: number | null;
   coil_dry_active: boolean;
   coil_dry_phase: "drain" | "blow" | null;
   coil_dry_until: number | null;
   coil_dry_entities: string[];
   schedule_temp_warnings: ScheduleTempWarning[];
+  /** Last 6 h of room temperature, `[unix_ts, temp, target]`, oldest first (dashboard cards). */
+  recent_temps?: [number, number | null, number | null][];
 }
 
 /** A schedule block temperature the backend discarded as implausible (#395). */
@@ -81,15 +108,26 @@ export interface DeviceConfig {
   heating_system_type?: string;
   idle_action?: "off" | "fan_only" | "setback" | "low"; // default "off"
   idle_fan_mode?: string; // default "low"
+  setback_auto_off?: boolean; // setback ends in off after an hour without demand, default off (#255)
   setpoint_mode?: "proportional" | "direct"; // default "proportional"
+  setpoint_offset?: number; // °C added to the room target in direct mode, default 0
   coil_dry?: "inherit" | "on" | "off"; // default "inherit"
   coil_dry_minutes?: number; // 0 = inherit global
   coil_dry_mode?: "" | "fan_only" | "dry"; // "" = inherit global
   coil_dry_fan_mode?: string; // "" = inherit global, "__keep__" = keep current
+  valve_opening_entity?: string; // number entity for direct valve opening degree (0-100%)
+  valve_closing_entity?: string; // number entity for direct valve closing degree (0-100%)
+  valve_closing_mode?: "closing_degree" | "idle_opening"; // idle_opening: the second entity is the opening while idle (SONOFF TRV-ZBT)
 }
 
 export type ConflictResolution =
   "heating_priority" | "cooling_priority" | "majority" | "outdoor_temp";
+
+/** A stored room whose Home Assistant area was deleted; it rests until the area is back (#494). */
+export interface RoomWithoutArea {
+  area_id: string;
+  display_name: string;
+}
 
 export interface CompressorGroup {
   id: string;
@@ -111,6 +149,20 @@ export interface RoomConfig {
   temperature_sensor: string;
   humidity_sensor: string;
   occupancy_sensors?: string[];
+  occupancy_eco_enabled?: boolean;
+  occupancy_eco_delay?: number;
+  co2_sensor?: string;
+  /** ppm; good again below 80 % of it. */
+  co2_threshold?: number;
+  voc_sensor?: string;
+  /** In the VOC sensor's unit; null = shown, not judged. */
+  voc_threshold?: number | null;
+  /** fan.*, switch.* or input_boolean.* RoomMind switches on for bad air. */
+  ventilation_entity?: string;
+  preheat_enabled?: boolean;
+  /** K the schedule target may move with the electricity price, 0 = off. */
+  price_shift?: number;
+  follow_device_setpoint?: boolean;
   window_sensors: string[];
   window_open_delay: number;
   window_close_delay: number;
@@ -144,6 +196,7 @@ export interface RoomConfig {
   covers_night_close_elevation?: number;
   covers_night_close_offset_minutes?: number;
   covers_snap_deploy?: boolean;
+  covers_window_hold?: boolean;
   cover_min_positions?: Record<string, number>;
   ignore_presence?: boolean;
   is_outdoor?: boolean;
@@ -152,12 +205,27 @@ export interface RoomConfig {
   heat_source_primary_delta?: number;
   heat_source_outdoor_threshold?: number;
   heat_source_ac_min_outdoor?: number;
+  /** Orchestration: expensive electricity prefers the primary source, cheap the AC. */
+  heat_source_price_aware?: boolean;
   climate_control_enabled?: boolean;
   live?: RoomLiveData;
 }
 
+/** What RoomMind reads from the price source (rooms/list ``price_status``). */
+export interface PriceStatus {
+  entity_id: string;
+  readable: boolean;
+  kind: "forecast" | "history" | "switch" | null;
+  price: number | null;
+  level: "cheap" | "normal" | "expensive" | null;
+  forecast_hours: number;
+  history_hours: number;
+  history_needed: number;
+}
+
 export interface GlobalSettings {
   outdoor_temp_sensor: string;
+  price_entity?: string;
   outdoor_humidity_sensor: string;
   outdoor_cooling_min?: number;
   outdoor_heating_max?: number;
@@ -186,6 +254,7 @@ export interface GlobalSettings {
   coil_dry_drain_minutes?: number;
   mold_detection_enabled?: boolean;
   mold_humidity_threshold?: number;
+  mold_f_rsi?: number;
   mold_sustained_minutes?: number;
   mold_notification_cooldown?: number;
   mold_notifications_enabled?: boolean;
@@ -197,6 +266,7 @@ export interface GlobalSettings {
   compressor_groups?: CompressorGroup[];
   room_order?: string[];
   group_by_floor?: boolean;
+  floor_order?: string[];
   boost_applied_at?: Record<string, number>;
 }
 
@@ -215,8 +285,14 @@ export interface HomeAssistant {
   entities: Record<string, HassEntityRegistryEntry>;
   devices: Record<string, HassDeviceRegistryEntry>;
   language: string;
-  config: { unit_system: { temperature: string } };
+  config: { unit_system: { temperature: string }; time_zone?: string };
+  user?: { is_admin: boolean; name?: string };
   connection?: HassConnection;
+  /** Translated state as Home Assistant shows it (e.g. "Heizen"); missing in old releases. */
+  formatEntityState?: (stateObj: HassEntity) => string;
+  formatEntityAttributeValue?: (stateObj: HassEntity, attribute: string, value?: unknown) => string;
+  /** HA's own light/dark choice (may differ from the OS). */
+  themes?: { darkMode?: boolean };
 }
 
 export interface HassArea {
@@ -224,6 +300,7 @@ export interface HassArea {
   name: string;
   picture: string | null;
   floor_id: string | null;
+  icon?: string | null;
 }
 
 export interface HassFloor {
@@ -242,12 +319,15 @@ export interface HassEntityRegistryEntry {
 export interface HassDeviceRegistryEntry {
   id: string;
   area_id: string | null;
+  name?: string | null;
+  name_by_user?: string | null;
 }
 
 export interface HassEntity {
   entity_id: string;
   state: string;
   attributes: Record<string, unknown>;
+  last_updated?: string;
 }
 
 export interface AnalyticsDataPoint {
@@ -263,14 +343,94 @@ export interface AnalyticsDataPoint {
   blind_position?: number | null;
   cover_reason?: string;
   device_setpoint?: number | null;
+  humidity?: number | null;
+  /** Room CO2 in ppm (#267). */
+  co2?: number | null;
+  heat_target?: number | null;
+  cool_target?: number | null;
+  /** What set the target: "" schedule, else a TargetReason. */
+  target_reason?: string;
+  mold_boost?: number | null;
+  price?: number | null;
+  price_level?: string;
+  /** Heat-side shift the electricity price applied (cool side moves the other way). */
+  price_shift?: number | null;
+}
+
+export interface RunOvershoot {
+  runs: number;
+  mean: number;
+  max: number;
+}
+
+export interface AnalyticsStats {
+  hours: number;
+  heating_hours: number;
+  cooling_hours: number;
+  window_hours: number;
+  heating_starts: number;
+  cooling_starts: number;
+  /** How far past the target the room went after the runs, null without runs. */
+  heat_overshoot?: RunOvershoot | null;
+  /** Run hours by price level, null without a price source. */
+  price?: {
+    heating_hours: Partial<Record<"cheap" | "normal" | "expensive", number>>;
+    cooling_hours: Partial<Record<"cheap" | "normal" | "expensive", number>>;
+    shifted_hours: number;
+  } | null;
+  cool_overshoot?: RunOvershoot | null;
+  comfort: {
+    below_pct: number;
+    within_pct: number;
+    above_pct: number;
+    mean_deviation: number;
+    /** Mean distance while off target, null when the room never was. */
+    miss_deviation: number | null;
+  } | null;
+}
+
+export interface RhythmDay {
+  date: string;
+  heat: Array<number | null>;
+  cool: Array<number | null>;
+  window: Array<number | null>;
+  deviation: Array<number | null>;
+  /** Share of the judged time too cold / too warm, same tolerance as the period figures. */
+  below: Array<number | null>;
+  above: Array<number | null>;
+  temp: Array<number | null>;
+  humidity: Array<number | null>;
+  outdoor: Array<number | null>;
+  /** The day's judged share on target, null without judged samples. */
+  within: number | null;
+}
+
+export interface AnalyticsRhythm {
+  days: RhythmDay[];
+}
+
+export interface ModelDay {
+  /** Local date, YYYY-MM-DD. */
+  date: string;
+  confidence: number;
+  mpc_active: boolean;
+  /** Mean absolute error of the ~3-min forecast that day (K), null without measurements. */
+  error: number | null;
+  error_steps: number;
 }
 
 export interface AnalyticsData {
   detail: AnalyticsDataPoint[];
   history: AnalyticsDataPoint[];
   forecast?: AnalyticsDataPoint[];
+  stats?: AnalyticsStats;
+  rhythm?: AnalyticsRhythm | null;
+  /** Unit of the price source (ct/kWh, EUR/kWh, ...), empty for a switch or none. */
+  price_unit?: string;
   model: {
     confidence: number;
+    /** One entry per local day, oldest first. */
+    daily_history?: ModelDay[];
     model: {
       C: number;
       U: number;
@@ -278,9 +438,12 @@ export interface AnalyticsData {
       Q_cool: number;
       Q_solar: number;
       Q_occupancy: number;
+      Q_fast?: number;
     };
     n_samples: number;
     n_observations: number;
+    /** Unix time of the model's last learning step, null before the first or from an older store */
+    last_update_at?: number | null;
     n_heating: number;
     n_cooling: number;
     applicable_modes: string[];
@@ -289,7 +452,34 @@ export interface AnalyticsData {
     prediction_std_idle: number;
     prediction_std_heating: number;
     has_occupancy_sensors: boolean;
+    /** Sun / occupancy were in the data (variance below its start), else the gain is the start guess */
+    solar_learned?: boolean;
+    occupancy_learned?: boolean;
+    solar_gain_now?: number;
+    solar_gain_today_max?: number;
+    /** Radiator rooms: rise a regular run's stored heat gives after the stop (°C), its decay time */
+    afterglow_k?: number;
+    afterglow_minutes?: number;
+    afterglow_learned?: boolean;
+    /** The model one hour ahead on this range (backend model_backtest), null without a model. */
+    backtest?: ModelBacktest | null;
   };
+}
+
+export interface BacktestFigures {
+  /** Hours (overlapping, one per recorded point) that went into the figure. */
+  n: number;
+  /** Mean absolute deviation after the horizon (°C), null below the minimum of hours. */
+  mae: number | null;
+  /** Mean signed deviation: model minus measured, negative = room warmer than the model says. */
+  bias: number | null;
+}
+
+export interface ModelBacktest {
+  horizon_minutes: number;
+  idle: BacktestFigures;
+  /** Hours with heating or cooling. */
+  active: BacktestFigures;
 }
 
 export type TimeRange = "12h" | "24h" | "2d" | "7d" | "14d" | "30d" | "90d";

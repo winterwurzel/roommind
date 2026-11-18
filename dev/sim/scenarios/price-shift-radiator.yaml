@@ -1,0 +1,71 @@
+name: price-shift-radiator
+description: >
+  Dynamic electricity tariff (Nordpool-style template sensor with raw_today/raw_tomorrow,
+  cheap night, expensive morning and evening). The heat-only bedroom (radiator, constant
+  19 °C) follows the price by up to 1 K: it charges in cheap hours before an expensive
+  stretch and coasts while it is expensive. Rooms without the option stay unchanged.
+  Compare against the same run with price_shift 0 (--set roommind.rooms.schlafzimmer.price_shift=0).
+refs: [257]
+tags: [price]
+extends: room-climate-entity-house
+start: 2026-01-12T00:00
+duration: 4d
+helpers:
+  template:
+    - sensor:
+        - name: Strompreis
+          unique_id: sim_strompreis
+          unit_of_measurement: ct/kWh
+          state: >-
+            {% set p = [22,21,20,20,21,24,30,34,31,27,25,24,23,23,24,26,30,36,38,35,30,27,25,23] %}
+            {{ p[now().hour] }}
+          attributes:
+            raw_today: >-
+              {% set p = [22,21,20,20,21,24,30,34,31,27,25,24,23,23,24,26,30,36,38,35,30,27,25,23] %}
+              {% set ns = namespace(out=[]) %}
+              {% for h in range(24) %}{% set s = today_at('00:00') + timedelta(hours=h) %}
+              {% set ns.out = ns.out + [{'start': s.isoformat(), 'end': (s + timedelta(hours=1)).isoformat(), 'value': p[h]}] %}
+              {% endfor %}{{ ns.out }}
+            raw_tomorrow: >-
+              {% set p = [22,21,20,20,21,24,30,34,31,27,25,24,23,23,24,26,30,36,38,35,30,27,25,23] %}
+              {% set ns = namespace(out=[]) %}
+              {% for h in range(24) %}{% set s = today_at('00:00') + timedelta(days=1, hours=h) %}
+              {% set ns.out = ns.out + [{'start': s.isoformat(), 'end': (s + timedelta(hours=1)).isoformat(), 'value': p[h]}] %}
+              {% endfor %}{{ ns.out }}
+roommind:
+  settings:
+    price_entity: sensor.strompreis
+  rooms:
+    schlafzimmer:
+      price_shift: 1.0
+    # Radiators (gas boiler in the house) next to the AC: the price picks the source
+    wohnzimmer:
+      heat_source_orchestration: true
+      heat_source_price_aware: true
+expect:
+  - {invariant: target_never_empty}
+  - {invariant: no_rejected_commands}
+  - {check: "room.schlafzimmer.price_level == 'expensive' and room.schlafzimmer.heat_target == 18.0", at: "+1d18h30m", label: coasts while expensive}
+  - {check: "room.schlafzimmer.price_level == 'cheap' and room.schlafzimmer.heat_target == 20.0", at: "+1d03h30m", label: charges before the expensive morning}
+  - {check: "room.bad.price_shift_heat == 0 and room.bad.heat_target == 22.0", at: "+1d18h30m", label: rooms without the option are untouched}
+  # 2026-11-09, 4 d: with the option 6.3 h of heating in expensive hours, 25.4 h in cheap ones;
+  # without it 11.5 / 8.9 h. Heat +2 %, commands 3.2 instead of 7.3 per hour (fewer, longer runs),
+  # in band 90 % instead of 99.5 % (the room coasts 1 K below the schedule while expensive)
+  # 2026-11-12: the pre-heat deadline took the end of an expensive stretch for a rise and heated
+  # the room back to 19 in the expensive hours (6.3 h); it only counts schedule rises now:
+  # 3.44 h, same as with pre-heating off, in band 86.6 % (under 15.6 instead of 13.2 Kh)
+  - {metric: room.heating_h_expensive, room: schlafzimmer, max: 4.5, label: less heating while expensive}
+  - {metric: room.heating_h_cheap, room: schlafzimmer, min: 18, label: heating moved to cheap hours}
+  - {metric: device.commands_per_hour, entity_id: climate.schlafzimmer_trv, max: 5}
+  # Living room (radiators + AC, orchestration with heat_source_price_aware), 4 d, January frost.
+  # Up to 2026-11-13 cheap electricity handed every gap below the large one to the AC: the night
+  # pre-heat for the morning moved from the radiators to the AC, whose runs ended after 2-3 min
+  # once the air reached the target while the walls stayed cold; the room then coasted and went
+  # into the comfort blocks ~1 K colder. Seeds 1/2: in band 72.9/73.8 % (same room without the
+  # price choice 78.8/80.6 %), AC 50/71 starts. Now the AC takes only gaps below primary_delta
+  # in the cold and leaves a running radiator run alone: 77.8/77.6 %, AC 34/31 starts, AC heat in
+  # cheap hours 2.7/2.5 kWh (before 4.9/6.1), radiator heat in expensive hours unchanged (#257)
+  - {metric: room.heating_without_source_h, room: wohnzimmer, max: 0.1}
+  - {metric: device.commands_per_hour, entity_id: climate.wohnzimmer_ac, max: 4}
+  - {metric: comfort.in_band_pct, room: wohnzimmer, min: 76, label: a cheap hour does not cut the pre-heat short}
+  - {metric: device.device_starts, entity_id: climate.wohnzimmer_ac, max: 45}

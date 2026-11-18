@@ -83,7 +83,7 @@ async def test_sensor_dropout_ekf_skipped(hass, mock_config_entry):
         await coordinator._async_update_data()
 
         mock_process.assert_not_called()
-        mock_clear.assert_called_once_with("living_room_abc12345")
+        mock_clear.assert_called_once_with("living_room_abc12345", resync=True)
 
 
 @pytest.mark.asyncio

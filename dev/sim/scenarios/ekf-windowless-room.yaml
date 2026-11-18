@@ -1,0 +1,57 @@
+name: ekf-windowless-room
+description: >
+  Small heated room without any window, so the true solar gain is zero. Strong
+  radiator against a light air node: after each burst the room relaxes faster than
+  a one-node model expects. The EKF must not book that (or anything else seen at
+  night) as solar gain; before the fix its cross-covariances let night-time
+  innovations move beta_s from 0.5 to ~3.7.
+refs: [35]
+tags: [trv, mpc, model]
+start: 2026-01-12T00:00
+duration: 10d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    abstellraum:
+      name: Abstellraum
+      floor_area_m2: 12
+      exterior_wall_m2: 8
+      initial: {temperature: 19.5}
+      windows: []
+      devices:
+        - {entity_id: climate.abstellraum_trv, profile: generic_trv}
+        - {entity_id: climate.heizung_kessel, profile: generic_boiler}
+      sensors:
+        temperature: {entity_id: sensor.abstellraum_temp}
+helpers:
+  schedule:
+    plan: {weekdays: ["06:00-08:00", "16:30-22:30"], weekend: ["07:30-23:00"]}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    weather_entity: weather.simhome
+    control_mode: mpc
+    compressor_groups:
+      - id: kessel
+        name: Kessel
+        members: [climate.abstellraum_trv]
+        master_entity: climate.heizung_kessel
+        min_run_minutes: 5
+        min_off_minutes: 5
+  rooms:
+    abstellraum:
+      devices: [{entity_id: climate.abstellraum_trv, type: trv, heating_system_type: radiator}]
+      temperature_sensor: sensor.abstellraum_temp
+      climate_mode: heat_only
+      schedules: [{entity_id: schedule.plan}]
+      comfort_temp: 20.0
+      eco_temp: 17.5
+expect:
+  - {metric: model.learned_beta_s, room: abstellraum, max: 2.0, label: no solar gain learned without a window}
+  - {metric: model.learned_alpha_per_h, room: abstellraum, min: 0.008, max: 0.03}
+  # radiator sized to the heat load: 33 Kh with the 30-min decision window, 10-11 with the
+  # pre-heat deadline (the rest: the learned heating rate is still ~2x the delivered one)
+  - {metric: comfort.undershoot_kh, room: abstellraum, max: 15, known_failure: 'candidate since the weather-compensated supply in the sim (2f43c4c): 9.8 -> 26.8 Kh. The radiator runs at full output from 1 h 40 min before the block, the room gains only 0.3 K/h: the learned heating rate is ~2x the delivered one (ratio 2.1, partly a sim air-node artefact, not separated)'}

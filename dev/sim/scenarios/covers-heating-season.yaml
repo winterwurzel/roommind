@@ -1,0 +1,46 @@
+name: covers-heating-season
+description: >
+  Early March, clear skies, cold nights: a south-facing living room heated by a split
+  heat pump (heat and cool, climate mode auto), exterior blind under automatic control.
+  The room needs heat every morning and the sun warms it in the afternoon. Solar gain
+  is welcome here, so the blind must not shade while the room heats, and the sun
+  alone must not close it as long as the room stays below its cooling target. The
+  outdoor gate is disabled (covers_outdoor_min_temp 0) so it cannot mask the check.
+tags: [covers, solar, ac]
+start: 2026-03-02T00:00
+duration: 7d
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate, fixed: {cloud: 10}}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    wohnzimmer:
+      floor_area_m2: 26
+      exterior_wall_m2: 14
+      initial: {temperature: 20.5, mass_temperature: 20.5}
+      windows: [{orientation: S, area_m2: 4, g_value: 0.6}]
+      covers: [{entity_id: cover.wohnzimmer_raffstore, profile: venetian_blind}]
+      devices: [{entity_id: climate.wz_ac, profile: generic_split_ac}]
+      sensors:
+        temperature: {entity_id: sensor.wz_temp}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    weather_entity: weather.simhome
+    control_mode: mpc
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_ac, type: ac}]
+      temperature_sensor: sensor.wz_temp
+      climate_mode: auto
+      comfort_heat: 21.0
+      comfort_cool: 24.5
+      covers: [cover.wohnzimmer_raffstore]
+      covers_auto_enabled: true
+      covers_outdoor_min_temp: 0
+expect:
+  - {invariant: no_rejected_commands}
+  - {metric: cover.shaded_while_heating_h, entity_id: cover.wohnzimmer_raffstore, max: 0, label: no shading while the room heats}
+  - {metric: cover.max_commands_per_day, entity_id: cover.wohnzimmer_raffstore, max: 6, label: cover moves per day}
+  - {metric: comfort.undershoot_kh, room: wohnzimmer, max: 10}

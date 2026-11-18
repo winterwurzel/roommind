@@ -532,3 +532,101 @@ class TestHeatSourceOrchestration:
         assert room_state["mode"] == MODE_IDLE, (
             "cool_only room with blocked AC should be IDLE even when a TRV is present"
         )
+
+
+def _cmd(eid: str, device_type: str, active: bool, pf: float):
+    from custom_components.roommind.managers.heat_source_orchestrator import DeviceCommand
+
+    return DeviceCommand(eid, "primary", device_type, active, pf, "")
+
+
+def test_training_power_counts_only_heating_devices():
+    """A parked TRV next to an AC heating alone must not halve the power the EKF sees."""
+    from custom_components.roommind.coordinator import _orchestrated_training_power
+    from custom_components.roommind.managers.heat_source_orchestrator import HeatSourcePlan
+
+    ac_only = HeatSourcePlan(
+        [_cmd("climate.trv", "thermostat", False, 0.0), _cmd("climate.ac", "ac", True, 0.6)], "secondary", ""
+    )
+    both = HeatSourcePlan(
+        [_cmd("climate.trv", "thermostat", True, 0.8), _cmd("climate.ac", "ac", True, 0.4)], "both", ""
+    )
+    none = HeatSourcePlan([_cmd("climate.trv", "thermostat", False, 0.0)], "none", "")
+    assert _orchestrated_training_power(ac_only) == 0.6
+    assert _orchestrated_training_power(both) == pytest.approx(0.6)
+    assert _orchestrated_training_power(none) == 0.0
+
+
+def _evaluate_heating_with_lead(lead_heat):
+    """Stand-in for MPCController.async_evaluate: heats, optionally ahead of a stricter upcoming target."""
+
+    async def _evaluate(self, current_temp, targets=None, **_kwargs):
+        self._lead_heat = lead_heat
+        return "heating", 1.0
+
+    return _evaluate
+
+
+class TestOrchestratedPreheat:
+    """MPC heats ahead of the comfort block while the eco target is still in force."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("lead_heat", [21.0, None])
+    async def test_sources_follow_the_target_the_run_heats_for(self, hass, mock_config_entry, lead_heat):
+        """Room at 19 °C above eco 17 °C: the lead target to 21 °C sets what the run heats for."""
+        from custom_components.roommind.control.mpc_controller import MPCController
+
+        room = TestHeatSourceOrchestration.ROOM_WITH_BOTH
+        store = _make_store_mock({"living_room_abc12345": room})
+        hass.data = {"roommind": {"store": store}}
+
+        ac_state = MagicMock()
+        ac_state.state = "off"
+        ac_state.attributes = {"hvac_modes": ["heat", "cool", "off"], "min_temp": 16, "max_temp": 30}
+        base_mock = make_mock_states_get(temp="19.0", schedule_state="off")
+
+        def custom_get(eid):
+            if eid == "climate.living_room_ac":
+                return ac_state
+            return base_mock(eid)
+
+        hass.states.get = MagicMock(side_effect=custom_get)
+        hass.services.async_call = AsyncMock()
+
+        with patch.object(MPCController, "async_evaluate", _evaluate_heating_with_lead(lead_heat)):
+            coordinator = _create_coordinator(hass, mock_config_entry)
+            await coordinator._async_update_data()
+
+        sources = coordinator._heat_source_states["living_room_abc12345"]
+        setpoints = [
+            c[0][2]["temperature"] for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"
+        ]
+        # Without the lead the run heats above its target too; it still gets a source
+        # instead of showing heating while nothing runs.
+        assert sources != "none"
+        if lead_heat is not None:
+            assert any(t > 21.0 for t in setpoints)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("preheat_mode", "shown"), [("heating", True), ("cooling", False)])
+async def test_live_names_the_preheat_of_the_running_mode(hass, mock_config_entry, preheat_mode, shown):
+    """rooms/list gets the controller's pre-heat only while the room runs in that mode."""
+    from custom_components.roommind.control.mpc_controller import MPCController
+
+    preheat = {"mode": preheat_mode, "target": 21.0, "at": 1_800_000_000}
+
+    async def _evaluate(self, current_temp, targets=None, **_kwargs):
+        self.preheat = preheat
+        return "heating", 1.0
+
+    store = _make_store_mock({"living_room": SAMPLE_ROOM})
+    hass.data = {"roommind": {"store": store}}
+    hass.states.get = make_mock_states_get(temp="19.0", schedule_state="off")
+    hass.services.async_call = AsyncMock()
+
+    with patch.object(MPCController, "async_evaluate", _evaluate):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        await coordinator._async_update_data()
+
+    assert coordinator.rooms["living_room"]["preheat"] == (preheat if shown else None)

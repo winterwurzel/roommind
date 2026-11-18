@@ -168,6 +168,15 @@ class TestBuildForecastOutdoorSeries:
         result = build_forecast_outdoor_series(forecast, 20.67, 6)
         assert result == [20.67, 15.6, 15.6, 15.6, 15.6, 15.6]
 
+    def test_without_reading_block_zero_keeps_the_forecast(self):
+        """No outdoor reading: the forecast is better than the placeholder, as in the controller (#464)."""
+        forecast = [{"temperature": 25.0}, {}]
+        result = build_forecast_outdoor_series(forecast, None, 24)
+        assert result == [25.0] * 12 + [10.0] * 12
+
+    def test_without_reading_or_forecast_uses_the_placeholder(self):
+        assert build_forecast_outdoor_series(None, None, 3) == [10.0] * 3
+
     def test_hourly_expansion_to_blocks(self):
         """Each hourly forecast entry covers 60 // PLAN_DT_MINUTES blocks."""
         forecast = [{"temperature": 5.0}, {"temperature": 6.0}]
@@ -419,9 +428,9 @@ class TestSimulateBangbang:
         )
         assert len(result) == 5
         # With strong heating (Q_heat=120, U=5.0), temp exceeds target after 1 block,
-        # but min_run=2 forces at least 2 consecutive heating blocks. Verify first
-        # two blocks both show temperature increases (heating active).
+        # min_run=2 keeps the second block heating while below target + hard ceiling.
         assert result[0] > 18.0, "Block 1 should heat"
+        assert result[0] < 21.0 + 1.0
         assert result[1] > result[0], "Block 2 should still heat (min_run stickiness)"
 
     def test_cooling_scenario(self):
@@ -823,43 +832,30 @@ class TestSimulateMPCEdgeCases:
         # Should drift toward outdoor (all idle)
         assert result[-1] < 15.0
 
-    def test_min_run_stickiness(self):
-        """Minimum run time blocks prevent premature mode switch (lines 210-211)."""
-        # Use underfloor heating with large min_run
+    def test_ufh_run_follows_the_controller_not_a_full_power_min_run(self):
+        """The controller keeps UFH heating at the optimizer's proportional power; the
+        prediction used to force full power for the whole min run and overshot by ~3 K."""
         model = RCModel(C=1.0, U=5.0, Q_heat=120.0, Q_cool=50.0, Q_solar=0.0)
         target_forecast = [{"target_temp": 21.0, "heat_target": 21.0, "cool_target": 24.0}] * 10
-        outdoor_series = [5.0] * 10
         room_config = {
             "thermostats": ["climate.trv"],
             "acs": [],
             "devices": [{"entity_id": "climate.trv", "type": "trv", "role": "auto", "heating_system_type": ""}],
             "climate_mode": "auto",
         }
-        # With underfloor min_run=6 blocks, heating continues even if temp exceeds target
         result = _simulate_mpc(
             model,
             target_forecast,
-            outdoor_series,
+            [5.0] * 10,
             current_temp=15.0,
             room_config=room_config,
             settings={},
             heating_system_type="underfloor",
         )
         assert len(result) == 10
-        # With Q_heat=120/U=5.0, temp exceeds target (21) after block 1, but
-        # underfloor min_run=6 forces continued heating. Verify at least 6
-        # consecutive temperature increases from the start.
-        consecutive_increases = 0
-        prev = 15.0
-        for t in result:
-            if t > prev:
-                consecutive_increases += 1
-            else:
-                break
-            prev = t
-        assert consecutive_increases >= 6, (
-            f"Expected >= 6 consecutive heating blocks (underfloor min_run), got {consecutive_increases}"
-        )
+        assert result[0] > 15.0
+        assert max(result) < 21.5
+        assert result[-1] == pytest.approx(21.0, abs=0.2)
 
     def test_cooling_action_applies_negative_q(self):
         """Cooling action → Q = -(pf * Q_cool) (line 249)."""
@@ -1021,3 +1017,74 @@ def test_analytics_simulator_ufh_shows_preheat():
     assert avg_ufh > avg_empty, (
         f"UFH avg temp {avg_ufh:.3f} should exceed empty-type avg {avg_empty:.3f} — UFH pre-heats, empty type waits"
     )
+
+
+def _ac_room_config() -> dict:
+    return {
+        "thermostats": [],
+        "acs": ["climate.ac"],
+        "devices": [{"entity_id": "climate.ac", "type": "ac", "role": "auto", "heating_system_type": ""}],
+        "climate_mode": "cool_only",
+    }
+
+
+@pytest.mark.parametrize("mpc_active", [True, False])
+def test_rebound_charge_warms_the_idle_prediction(mpc_active):
+    """A charged AC room rebounds in the analytics prediction too (both strategies)."""
+    model = RCModel(C=1.0, U=0.02, Q_heat=3.0, Q_cool=2.0, Q_fast=20.0)
+    # cool target far away: both strategies idle, only the rebound moves the room
+    forecast = [{"target_temp": 30.0, "heat_target": None, "cool_target": 30.0}] * 6
+    kwargs = dict(
+        model=model,
+        estimator=ThermalEKF(),
+        target_forecast=forecast,
+        outdoor_series=[24.0] * 6,
+        current_temp=24.0,
+        window_open=False,
+        mpc_active=mpc_active,
+        room_config=_ac_room_config(),
+        settings={},
+        all_points=[],
+    )
+    charged = simulate_prediction(**kwargs, q_rebound=0.8)
+    plain = simulate_prediction(**kwargs)
+    assert charged[0] > plain[0]
+
+
+@pytest.mark.parametrize(
+    ("run_system", "expected_type", "expected_min_run"),
+    [(None, "underfloor", 6), ("", "", 2)],
+)
+def test_prediction_uses_the_run_system_of_the_heating_source(monkeypatch, run_system, expected_type, expected_min_run):
+    """AC heating alone in an orchestrated UFH room: the prediction plans with AC run rules, like the controller."""
+    import custom_components.roommind.control.analytics_simulator as sim_mod
+
+    seen: dict = {}
+    real_init = sim_mod.MPCOptimizer.__init__
+
+    def spy_init(self, *args, **kwargs):
+        seen.setdefault("type", kwargs.get("heating_system_type"))
+        seen.setdefault("min_run", kwargs.get("min_run_blocks"))
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(sim_mod.MPCOptimizer, "__init__", spy_init)
+    room_config = {
+        "devices": [{"entity_id": "climate.ufh", "type": "trv", "role": "auto", "heating_system_type": "underfloor"}],
+        "climate_mode": "heat_only",
+    }
+    simulate_prediction(
+        model=RCModel(C=1.0, U=0.05, Q_heat=3.0, Q_cool=0.0, Q_solar=0.0),
+        estimator=ThermalEKF(),
+        target_forecast=[{"target_temp": 21.0}] * 5,
+        outdoor_series=[5.0] * 5,
+        current_temp=20.0,
+        window_open=False,
+        mpc_active=True,
+        room_config=room_config,
+        settings={},
+        all_points=[],
+        heating_system_type="underfloor",
+        run_system=run_system,
+    )
+    assert seen["type"] == expected_type
+    assert seen["min_run"] == expected_min_run

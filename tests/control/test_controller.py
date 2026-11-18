@@ -175,7 +175,7 @@ async def test_mpc_requires_min_updates():
     assert mode2 == "idle"  # still bang-bang
     assert pf2 == 0.0
 
-    # Enough data → MPC (would heat at 20.9 because optimizer predicts drop)
+    # Enough data → MPC (starts outside the hysteresis with proportional power)
     model_mgr.get_mode_counts = MagicMock(return_value=(100, 30, 0))
     ctrl3 = MPCController(
         hass,
@@ -185,9 +185,25 @@ async def test_mpc_requires_min_updates():
         settings={},
         has_external_sensor=True,
     )
-    mode3, pf3 = await ctrl3.async_evaluate(current_temp=20.9, target_temp=21.0)
-    assert mode3 == "heating"  # MPC: optimizer decides to heat proactively
+    ctrl3._evaluate_mpc = MagicMock(wraps=ctrl3._evaluate_mpc)
+    mode3, pf3 = await ctrl3.async_evaluate(current_temp=20.8, target_temp=21.0)
+    ctrl3._evaluate_mpc.assert_called_once()
+    assert mode3 == "heating"
     assert 0.0 < pf3 <= 1.0
+
+    # A radiator room whose sensor lags the afterglow plans from the estimate (AfterglowReading)
+    ctrl4 = MPCController(
+        hass,
+        room,
+        model_manager=model_mgr,
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+        planning_temp=21.1,
+    )
+    ctrl4._evaluate_mpc = MagicMock(return_value=("idle", 0.0))
+    await ctrl4.async_evaluate(current_temp=20.9, target_temp=21.0)
+    assert ctrl4._evaluate_mpc.call_args.args[0] == 21.1
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +378,35 @@ class TestIsMpcActive:
         model_mgr.get_mode_counts = MagicMock(return_value=(100, 0, 0))
         result = is_mpc_active(model_mgr, "living_room", False, False, 20.0, 10.0)
         assert result is True
+
+    def test_cool_only_room_in_winter_without_cooling_data_is_not_ready(self):
+        """Outdoor limits close both sides: the room's own sides still need their samples."""
+        from custom_components.roommind.control.mpc_controller import is_mpc_active
+
+        model_mgr = RoomModelManager()
+        model_mgr.update("office", 20.0, 5.0, "idle", 5.0)
+        model_mgr.get_prediction_std = MagicMock(return_value=0.1)
+        model_mgr.get_mode_counts = MagicMock(return_value=(900, 0, 0))
+        assert is_mpc_active(model_mgr, "office", False, False, 20.0, 5.0, room_sides=(False, True)) is False
+
+    def test_trained_heat_only_room_in_summer_stays_ready(self):
+        from custom_components.roommind.control.mpc_controller import is_mpc_active
+
+        model_mgr = RoomModelManager()
+        model_mgr.update("bedroom", 24.0, 25.0, "idle", 5.0)
+        model_mgr.get_prediction_std = MagicMock(return_value=0.1)
+        model_mgr.get_mode_counts = MagicMock(return_value=(900, 300, 0))
+        assert is_mpc_active(model_mgr, "bedroom", False, False, 24.0, 25.0, room_sides=(True, False)) is True
+
+    def test_room_sides_only_count_when_the_outdoor_limits_close_both(self):
+        """A hybrid room in winter heats on MPC before its AC ever cooled."""
+        from custom_components.roommind.control.mpc_controller import is_mpc_active
+
+        model_mgr = RoomModelManager()
+        model_mgr.update("living_room", 20.0, 5.0, "idle", 5.0)
+        model_mgr.get_prediction_std = MagicMock(return_value=0.1)
+        model_mgr.get_mode_counts = MagicMock(return_value=(900, 300, 0))
+        assert is_mpc_active(model_mgr, "living_room", True, False, 20.0, 5.0, room_sides=(True, True)) is True
 
     def test_prediction_std_at_threshold(self):
         """pred_std exactly at MPC_MAX_PREDICTION_STD (0.5) → False."""

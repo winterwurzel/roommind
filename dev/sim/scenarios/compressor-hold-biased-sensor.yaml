@@ -1,0 +1,24 @@
+name: compressor-hold-biased-sensor
+extends: smoke-ac-compressor
+description: >
+  Same room as the smoke test, but checks the hold against a split AC whose return-air
+  sensor reads 1.5 K warm while heating: the unit stops its compressor on its own once
+  its sensor passes the setpoint, even though the mode stays "heat".
+  min_run_hold_keeps_setpoint is the #436 regression check: v1.7.7 cuts the setpoint to
+  the plain room target when the room goes idle during the min run, which stops the
+  unit at once; since 1.7.8 the unit keeps its last active setpoint.
+  The physical runs stay short anyway when that last setpoint was a small proportional
+  one (target +1 K after snapping to whole degrees): the unit's biased sensor reads it
+  as reached and the unit cycles on its own minimum run. Holding a higher setpoint would
+  overheat a room that is already at its target, so this is not fixed in the hold.
+  Once the room is 0.5 K past its target the hold throttles the unit to the value its
+  own sensor reads, so a saturated boost no longer carries the room degrees past it.
+refs: [436, 452]
+tags: [compressor, ac]
+expect:
+  - {invariant: hold_shows_running_unit, label: dashboard shows the held unit heating plus the min-run time left (#452)}
+  - {invariant: min_run_hold_keeps_setpoint}
+  - {invariant: min_run_commanded}
+  - {metric: comfort.hold_heat_over_max_k, room: wohnzimmer, max: 2.0, label: held unit throttled to its own reading past target + 0.5 K (2.6 to 3.6 K before)}
+  - {invariant: min_run_respected, known_failure: 'unit cycles on its own sensor: the hold keeps the last proportional setpoint, often target +1 K after a one-tick heat decision near the target, and the +1.5 K return-air bias reads that as reached'}
+  - {metric: device.starts_per_day, entity_id: climate.wohnzimmer_ac, max: 30, known_failure: 'same cause as min_run_respected (unit cycles on its own sensor at a small held setpoint)'}

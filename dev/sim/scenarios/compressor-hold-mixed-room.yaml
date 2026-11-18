@@ -1,0 +1,35 @@
+name: compressor-hold-mixed-room
+extends: smoke-ac-compressor
+description: >
+  Split AC in a compressor group plus a radiator TRV outside the group in the same room.
+  The TRV reports no hvac_action and stays in heat at its minimum while idle ("low").
+  During the AC's min-run hold the room shows what the held AC does, and EKF training
+  pauses as long as the AC runs (#436); before #452 the TRV's missing hvac_action made
+  the room-wide observation inconclusive, so held runs were trained as idle.
+refs: [452, 436]
+tags: [compressor, ac]
+duration: 4d
+house:
+  rooms:
+    wohnzimmer:
+      devices:
+        - {entity_id: climate.wohnzimmer_ac, profile: generic_split_ac}
+        - entity_id: climate.wohnzimmer_trv
+          profile: generic_trv
+          quirks: [{type: no_state_feedback, beep_per_command: false, current_temperature: true}]
+roommind:
+  rooms:
+    wohnzimmer:
+      devices:
+        - {entity_id: climate.wohnzimmer_ac, type: ac}
+        - {entity_id: climate.wohnzimmer_trv, type: trv, heating_system_type: radiator, idle_action: low}
+      # Heat only keeps the AC of a room with a TRV off (#476); auto lets it heat along
+      climate_mode: auto
+      comfort_heat: 21.0
+      eco_heat: 18.0
+expect:
+  - {invariant: hold_shows_running_unit, label: room shows the held AC and the min-run time left (#452)}
+  - {metric: model.learned_beta_s, room: wohnzimmer, max: 4.0, label: "held AC runs not trained as idle (5.8 to 6.9 before, truth 2.4)"}
+  - {metric: model.learned_alpha_per_h, room: wohnzimmer, max: 0.018, label: "loss coefficient near the truth (0.018 to 0.020 before, truth 0.014)"}
+  - {invariant: min_run_commanded}
+  - {invariant: target_never_empty}

@@ -4,10 +4,14 @@
  */
 import { html, css, nothing } from "lit";
 import { RsSettingsBase } from "./rs-settings-base";
+import "../shared/rs-number-field";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant, NotificationTarget } from "../../types";
 import { localize } from "../../utils/localize";
-import { getSelectValue } from "../../utils/events";
+import "../shared/rs-icon-button";
+import "../shared/rs-list-row";
+import "../shared/rs-segmented";
+import { notifyTargetIcon, notifyTargetName } from "../../utils/notify-target";
 
 @customElement("rs-settings-notifications")
 export class RsSettingsNotifications extends RsSettingsBase {
@@ -15,6 +19,7 @@ export class RsSettingsNotifications extends RsSettingsBase {
   @property({ type: Boolean }) public notificationsEnabled = true;
   @property({ type: Array }) public notificationTargets: NotificationTarget[] = [];
   @property({ type: Number }) public notificationCooldown = 60;
+  @property({ type: Boolean }) public moldDetectionEnabled = false;
   @property({ type: Boolean }) public moldPreventionEnabled = false;
   @property({ type: Boolean }) public moldPreventionNotify = false;
 
@@ -22,104 +27,41 @@ export class RsSettingsNotifications extends RsSettingsBase {
     const l = this.hass.language;
 
     return html`
-      <div class="toggle-row">
-        <div class="toggle-text">
-          <span class="toggle-label">${localize("notifications.enabled", l)}</span>
-          <span class="toggle-hint">${localize("notifications.enabled_hint", l)}</span>
-        </div>
-        <ha-switch
+      <div class="settings-section first">
+        <rs-list-row
+          switch
+          wrap
+          .heading=${localize("notifications.enabled", l)}
+          .secondary=${localize("notifications.enabled_hint", l)}
           .checked=${this.notificationsEnabled}
-          @change=${(e: Event) =>
-            this._fire("moldNotificationsEnabled", (e.target as HTMLInputElement).checked)}
-        ></ha-switch>
+          @toggle-changed=${(e: CustomEvent<boolean>) =>
+            this._fire("moldNotificationsEnabled", e.detail)}
+        ></rs-list-row>
+        ${this.notificationsEnabled && !this.moldDetectionEnabled ? this._renderMoldOff() : nothing}
       </div>
 
       ${
         this.notificationsEnabled
           ? html`
-              <div class="detail-section">
-                <p class="hint">${localize("notifications.desc", l)}</p>
-
-                <div class="target-list">
-                  ${this.notificationTargets.map((t, idx) => {
-                    const name = t.entity_id
-                      ? (this.hass.states[t.entity_id]?.attributes?.friendly_name ??
-                        t.entity_id.replace("notify.", ""))
-                      : localize("notifications.target_unnamed", l);
-                    return html`
-                      <div class="target-card">
-                        <div class="target-header">
-                          <ha-icon
-                            icon="mdi:bell"
-                            style="--mdc-icon-size: 18px; color: var(--secondary-text-color)"
-                          ></ha-icon>
-                          <span>${name}</span>
-                          <ha-icon-button
-                            .path=${"M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"}
-                            @click=${() => {
-                              this._fire(
-                                "moldNotificationTargets",
-                                this.notificationTargets.filter((_, i) => i !== idx),
-                              );
-                            }}
-                          ></ha-icon-button>
-                        </div>
-                        <div class="target-detail">
-                          <ha-entity-picker
-                            .hass=${this.hass}
-                            .value=${t.person_entity}
-                            .includeDomains=${["person"]}
-                            .label=${localize("notifications.target_person", l)}
-                            allow-custom-entity
-                            @value-changed=${(e: CustomEvent) => {
-                              const targets = [...this.notificationTargets];
-                              targets[idx] = {
-                                ...targets[idx],
-                                person_entity: (e.detail?.value as string) ?? "",
-                              };
-                              this._fire("moldNotificationTargets", targets);
-                            }}
-                          ></ha-entity-picker>
-                          <ha-select
-                            .value=${t.notify_when}
-                            .options=${[
-                              {
-                                value: "always",
-                                label: localize("notifications.target_when_always", l),
-                              },
-                              {
-                                value: "home_only",
-                                label: localize("notifications.target_when_home", l),
-                              },
-                            ]}
-                            fixedMenuPosition
-                            @selected=${(e: Event) => {
-                              const v = getSelectValue(e) as "always" | "home_only";
-                              if (!v) return;
-                              const targets = [...this.notificationTargets];
-                              targets[idx] = { ...targets[idx], notify_when: v };
-                              this._fire("moldNotificationTargets", targets);
-                            }}
-                            @closed=${(e: Event) => e.stopPropagation()}
-                          >
-                            <ha-list-item value="always"
-                              >${localize("notifications.target_when_always", l)}</ha-list-item
-                            >
-                            <ha-list-item value="home_only"
-                              >${localize("notifications.target_when_home", l)}</ha-list-item
-                            >
-                          </ha-select>
-                        </div>
-                      </div>
-                    `;
-                  })}
+              <div class="settings-section stack">
+                <div>
+                  <h3 class="section-title">${localize("notifications.recipients", l)}</h3>
+                  <p class="note">${localize("notifications.desc", l)}</p>
                 </div>
-
-                <div style="margin-top: 8px">
+                ${
+                  this.notificationTargets.length
+                    ? html`<div class="target-list">
+                        ${this.notificationTargets.map((t, idx) => this._renderTarget(t, idx))}
+                      </div>`
+                    : nothing
+                }
+                <div>
                   <ha-entity-picker
                     .hass=${this.hass}
                     .value=${""}
                     .includeDomains=${["notify"]}
+                    .entityFilter=${(entity: { entity_id: string }) =>
+                      !this.notificationTargets.some((t) => t.entity_id === entity.entity_id)}
                     .label=${localize("notifications.add_target_label", l)}
                     allow-custom-entity
                     @value-changed=${(e: CustomEvent) => {
@@ -135,48 +77,35 @@ export class RsSettingsNotifications extends RsSettingsBase {
                   ></ha-entity-picker>
                   <span class="field-hint">${localize("notifications.add_target_hint", l)}</span>
                 </div>
+              </div>
 
-                <div class="threshold-grid" style="margin-top: 12px">
-                  <div class="threshold-field">
-                    <ha-textfield
-                      .value=${String(this.notificationCooldown)}
-                      .label=${localize("notifications.cooldown", l)}
-                      .suffix=${"min"}
-                      type="number"
-                      step="5"
-                      min="10"
-                      max="1440"
-                      @change=${(e: Event) => {
-                        const v = parseInt((e.target as HTMLInputElement).value, 10);
-                        if (!isNaN(v) && v >= 10 && v <= 1440)
-                          this._fire("moldNotificationCooldown", v);
-                      }}
-                    ></ha-textfield>
-                    <span class="field-hint">${localize("notifications.cooldown_hint", l)}</span>
-                  </div>
+              <div class="settings-section">
+                <div class="threshold-grid">
+                  <rs-number-field
+                    .label=${localize("notifications.cooldown", l)}
+                    suffix="min"
+                    .hint=${localize("notifications.cooldown_hint", l)}
+                    .min=${10}
+                    .max=${1440}
+                    .value=${this.notificationCooldown}
+                    @value-changed=${(e: CustomEvent<{ value: number }>) =>
+                      this._fire("moldNotificationCooldown", e.detail.value)}
+                  ></rs-number-field>
                 </div>
 
                 ${
                   this.moldPreventionEnabled
                     ? html`
-                        <div class="toggle-row" style="margin-top: 12px">
-                          <div class="toggle-text">
-                            <span class="toggle-label"
-                              >${localize("notifications.mold_prevention_notify", l)}</span
-                            >
-                            <span class="toggle-hint"
-                              >${localize("notifications.mold_prevention_notify_hint", l)}</span
-                            >
-                          </div>
-                          <ha-switch
-                            .checked=${this.moldPreventionNotify}
-                            @change=${(e: Event) =>
-                              this._fire(
-                                "moldPreventionNotify",
-                                (e.target as HTMLInputElement).checked,
-                              )}
-                          ></ha-switch>
-                        </div>
+                        <rs-list-row
+                          class="prevention-row"
+                          switch
+                          wrap
+                          .heading=${localize("notifications.mold_prevention_notify", l)}
+                          .secondary=${localize("notifications.mold_prevention_notify_hint", l)}
+                          .checked=${this.moldPreventionNotify}
+                          @toggle-changed=${(e: CustomEvent<boolean>) =>
+                            this._fire("moldPreventionNotify", e.detail)}
+                        ></rs-list-row>
                       `
                     : nothing
                 }
@@ -187,64 +116,173 @@ export class RsSettingsNotifications extends RsSettingsBase {
     `;
   }
 
+  private _renderTarget(t: NotificationTarget, idx: number) {
+    const l = this.hass.language;
+    const name = t.entity_id
+      ? notifyTargetName(this.hass, t.entity_id)
+      : localize("notifications.target_unnamed", l);
+    const homeOnly = t.notify_when === "home_only";
+    const update = (changes: Partial<NotificationTarget>) => {
+      const targets = [...this.notificationTargets];
+      targets[idx] = { ...targets[idx], ...changes };
+      this._fire("moldNotificationTargets", targets);
+    };
+    return html`<div class="target">
+      <div class="target-head">
+        <ha-icon .icon=${notifyTargetIcon(t.entity_id)} aria-hidden="true"></ha-icon>
+        <div class="target-name">
+          <span>${name}</span>
+          ${
+            t.entity_id && name !== t.entity_id.replace(/^notify\./, "")
+              ? html`<small>${t.entity_id}</small>`
+              : nothing
+          }
+        </div>
+        <rs-icon-button
+          size="sm"
+          icon="mdi:close"
+          .label=${localize("common.remove_named", l, { name })}
+          @click=${() =>
+            this._fire(
+              "moldNotificationTargets",
+              this.notificationTargets.filter((_, i) => i !== idx),
+            )}
+        ></rs-icon-button>
+      </div>
+      <rs-segmented
+        wrap
+        size="sm"
+        .label=${localize("notifications.target_when_label", l, { name })}
+        .options=${[
+          { value: "always", label: localize("notifications.target_when_always", l) },
+          { value: "home_only", label: localize("notifications.target_when_home", l) },
+        ]}
+        .value=${homeOnly ? "home_only" : "always"}
+        @value-changed=${(e: CustomEvent<{ value: string }>) => {
+          const v = e.detail.value as NotificationTarget["notify_when"];
+          if (v && v !== t.notify_when) update({ notify_when: v });
+        }}
+      ></rs-segmented>
+      ${
+        homeOnly
+          ? html`<div>
+              <ha-entity-picker
+                .hass=${this.hass}
+                .value=${t.person_entity}
+                .includeDomains=${["person"]}
+                .label=${localize("notifications.target_person", l)}
+                @value-changed=${(e: CustomEvent) =>
+                  update({ person_entity: (e.detail?.value as string) ?? "" })}
+              ></ha-entity-picker>
+              ${
+                t.person_entity
+                  ? nothing
+                  : html`<span class="field-hint"
+                      >${localize("notifications.target_person_missing", l)}</span
+                    >`
+              }
+            </div>`
+          : nothing
+      }
+    </div>`;
+  }
+
+  /** Only mold detection and the prevention notice send anything from this page. */
+  private _renderMoldOff() {
+    const l = this.hass.language;
+    return html`<div class="mold-off">
+      <p class="hint">
+        ${localize(
+          this.moldPreventionEnabled && this.moldPreventionNotify
+            ? "notifications.mold_off_prevention"
+            : "notifications.mold_off",
+          l,
+        )}
+      </p>
+      <rs-list-row
+        href="/roommind/settings/mold"
+        chevron
+        icon="mdi:water-alert"
+        .heading=${localize("mold.title", l)}
+        @click=${this._onMoldClick}
+      ></rs-list-row>
+    </div>`;
+  }
+
+  private _onMoldClick(e: MouseEvent) {
+    // Ctrl/Cmd/Shift/middle click keep the browser's "open in new tab".
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    this.dispatchEvent(
+      new CustomEvent("settings-category-changed", {
+        detail: { category: "mold" },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   static styles = [
     RsSettingsBase.settingsBaseStyles,
     css`
       .hint {
         color: var(--secondary-text-color);
         font-size: 13px;
-        margin: 12px 0;
-        line-height: 1.4;
+        margin: 0 0 var(--rs-space-3);
+        line-height: 1.5;
       }
-      .detail-section {
-        margin-top: 4px;
+      .mold-off {
+        margin-top: var(--rs-space-3);
       }
-      .field-hint {
-        color: var(--secondary-text-color);
-        font-size: 12px;
+      .mold-off .hint {
+        margin-bottom: var(--rs-space-1);
+      }
+      .prevention-row {
+        margin-top: var(--rs-space-2);
       }
 
       .target-list {
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: var(--rs-space-2);
       }
-      .target-card {
+      .target {
         display: flex;
         flex-direction: column;
-        gap: 4px;
-        padding: 8px 8px 8px 12px;
-        border-radius: 8px;
-        background: rgba(0, 0, 0, 0.04);
+        gap: var(--rs-space-3);
+        padding: var(--rs-space-2) var(--rs-space-2) var(--rs-space-3) var(--rs-space-3);
+        border-radius: var(--rs-radius);
+        background: var(--rs-fill);
       }
-      .target-header {
+      .target-head {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: var(--rs-space-3);
+        --mdc-icon-size: 20px;
       }
-      .target-header span {
+      .target-head ha-icon {
+        color: var(--secondary-text-color);
+        flex: none;
+      }
+      .target-name {
         flex: 1;
-        font-size: 14px;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .target-name span {
+        font-size: var(--rs-font-md);
         font-weight: 500;
+        overflow-wrap: anywhere;
       }
-      .target-detail {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        padding-left: 26px;
+      .target-name small {
+        font-size: var(--rs-font-sm);
+        color: var(--secondary-text-color);
+        overflow-wrap: anywhere;
       }
-      .target-detail ha-entity-picker {
-        flex: 1;
-      }
-      .target-detail ha-select {
-        min-width: 120px;
-      }
-
-      @media (max-width: 600px) {
-        .target-detail {
-          flex-direction: column;
-          padding-left: 0;
-        }
+      .target > rs-segmented,
+      .target > div:last-child:not(.target-head) {
+        margin-right: var(--rs-space-1);
       }
     `,
   ];

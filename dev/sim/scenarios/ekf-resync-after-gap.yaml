@@ -1,0 +1,58 @@
+name: ekf-resync-after-gap
+description: >
+  Radiator room whose temperature sensor drops out for four hours on a cold night while
+  the room cools by a couple of degrees, then comes back. Training is paused during the
+  gap, so the model temperature is hours old when it resumes, as after an HA outage and
+  restart. Learning that jump as one cycle's change used to drag the heat-loss rate up,
+  which made pre-heating start hours early (#478). The model must come out of the gap
+  as it went in.
+refs: [478]
+tags: [trv, mpc, model]
+start: 2026-01-12T00:00
+duration: 5d04h30m
+location: {latitude: 52.5, longitude: 13.4, time_zone: Europe/Berlin}
+weather: {profile: temperate}
+house:
+  building: bestand_teilsaniert
+  outdoor: {sensors: {temperature: sensor.aussen_temp}}
+  rooms:
+    schlafzimmer:
+      name: Schlafzimmer
+      floor_area_m2: 16
+      exterior_wall_m2: 11
+      initial: {temperature: 20.0}
+      windows: [{orientation: N, area_m2: 1.8}]
+      devices:
+        - {entity_id: climate.schlafzimmer_trv, profile: generic_trv}
+        - {entity_id: climate.heizung_kessel, profile: generic_boiler}
+      sensors:
+        temperature: {entity_id: sensor.schlafzimmer_temp}
+helpers:
+  schedule:
+    plan: {daily: ["07:00-22:00"]}
+roommind:
+  settings:
+    outdoor_temp_sensor: sensor.aussen_temp
+    weather_entity: weather.simhome
+    control_mode: mpc
+    compressor_groups:
+      - {id: kessel, name: Kessel, members: [climate.schlafzimmer_trv], master_entity: climate.heizung_kessel, min_run_minutes: 5, min_off_minutes: 5}
+  rooms:
+    schlafzimmer:
+      devices: [{entity_id: climate.schlafzimmer_trv, type: trv, heating_system_type: radiator}]
+      temperature_sensor: sensor.schlafzimmer_temp
+      climate_mode: heat_only
+      schedules: [{entity_id: schedule.plan}]
+      comfort_temp: 21.0
+      eco_temp: 16.0
+timeline:
+  - {at: "+5d00h00m", do: entity.unavailable, entity_id: sensor.schlafzimmer_temp}
+  # restart inside the gap (5 s in the sim): the sensor gap triggers the resync either way,
+  # the start path itself is covered by a unit test
+  - {at: "+5d02h00m", do: ha.restart}
+  - {at: "+5d04h00m", do: entity.available, entity_id: sensor.schlafzimmer_temp}
+expect:
+  - {invariant: no_rejected_commands}
+  # 30 min after the gap: v1.8.0 0.039 (the jump learned as heat loss), fixed 0.017,
+  # the same room without the gap 0.015
+  - {metric: model.learned_alpha_per_h, room: schlafzimmer, min: 0.008, max: 0.025}

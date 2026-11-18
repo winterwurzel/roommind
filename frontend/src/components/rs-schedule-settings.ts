@@ -1,24 +1,57 @@
 import { html, css, nothing } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import type { ScheduleEntry, ClimateMode, ScheduleTempWarning } from "../types";
 import { localize } from "../utils/localize";
 import {
-  formatTemp,
+  formatTempLocale,
   tempUnit,
-  toDisplay,
-  toCelsius,
   isPlausibleTargetTemp,
   MIN_TARGET_TEMP_C,
   MAX_TARGET_TEMP_C,
-  tempStep,
   tempRange,
 } from "../utils/temperature";
+import { formatNumber } from "../utils/format";
 import { RsScheduleBase } from "./shared/rs-schedule-base";
 import { inputStyles } from "../styles/input-styles";
+import { priceShiftLabel } from "./room-detail/rs-price-shift";
+import { isAdmin, isEditableSchedule, readWeek } from "../utils/schedule-api";
+import { dayTimes, nowInZone, type Week } from "../utils/schedule-week";
+import "./shared/rs-list-row";
+import "./shared/rs-info-icon";
+import "./schedule/rs-schedule-create";
+import "./schedule/rs-day-timeline";
 
 /** Mirrors _WEEKDAYS in the backend's schedule_utils.py. */
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
+/** Texts of the pre-heat switch by the lead it controls. */
+const PREHEAT_KEYS = {
+  heat: {
+    label: "schedule.preheat_label",
+    sub: "detail.schedule.preheat_sub",
+    hint: "schedule.preheat_hint",
+  },
+  cool: {
+    label: "schedule.precool_label",
+    sub: "detail.schedule.precool_sub",
+    hint: "schedule.precool_hint",
+  },
+  both: {
+    label: "schedule.preheat_precool_label",
+    sub: "detail.schedule.preheat_precool_sub",
+    hint: "schedule.preheat_precool_hint",
+  },
+} as const;
+
+/** Which dialog a row of the card opens (`edit-click` detail `{ part }`). */
+export type ScheduleCardPart = "schedule" | "temperatures" | "price";
+
+/**
+ * The room's "Schedule & temperatures" card. View mode: one row per schedule, comfort, eco,
+ * pre-heat, device changes and price; each clickable row fires `edit-click` with the dialog it
+ * belongs to. Edit mode is the content of the schedule dialog (assigned helpers, adding one,
+ * selector); temperatures and price have their own dialog components.
+ */
 @customElement("rs-schedule-settings")
 export class RsScheduleSettings extends RsScheduleBase {
   @property({ attribute: false }) public schedules: ScheduleEntry[] = [];
@@ -42,92 +75,108 @@ export class RsScheduleSettings extends RsScheduleBase {
   @property({ type: Number }) public ecoCool = 27.0;
   @property({ type: String }) public climateMode: ClimateMode = "auto";
   @property({ attribute: false }) public scheduleTempWarnings: ScheduleTempWarning[] = [];
+  @property({ type: Boolean }) public preheatEnabled = true;
+  /** Which lead the pre-heat switch controls here ("" hides it). */
+  @property({ type: String }) public preheatSides: "" | "heat" | "cool" | "both" = "";
+  @property({ type: Boolean }) public followDeviceSetpoint = false;
+  /** K the schedule target may move with the electricity price (0 = off). */
+  @property({ type: Number }) public priceShift = 0;
+  /** A price source is set in the settings; without one the option is hidden. */
+  @property({ type: Boolean }) public priceConfigured = false;
+  /** What the room does while its schedule is off / everybody is away (global settings). */
+  @property({ type: String }) public scheduleOffAction: "eco" | "off" = "eco";
+  @property({ type: String }) public presenceAwayAction: "eco" | "off" = "eco";
+  /** Presence detection applies to this room (on globally, persons to watch, not ignored). */
+  @property({ type: Boolean }) public presenceActive = false;
+  /** An empty room drops to eco (occupancy eco with sensors). */
+  @property({ type: Boolean }) public occupancyEco = false;
+  /** Default name of a schedule created from the dialog. */
+  @property({ type: String }) public roomName = "";
+
+  @state() private _creating = false;
+  /** Week of the active schedule for today's timeline; `_weekKey` = what it was read for. */
+  @state() private _week: Week | null = null;
+  @state() private _now = nowInZone(undefined);
+  private _weekKey = "";
+  private _clock?: ReturnType<typeof setInterval>;
+  protected readonly _kind = "climate";
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._tick();
+    this._clock = setInterval(() => this._tick(), 60_000);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    clearInterval(this._clock);
+    this._weekKey = "";
+  }
+
+  private _tick() {
+    this._now = nowInZone(this.hass?.config?.time_zone);
+  }
+
+  protected willUpdate(changed: Map<PropertyKey, unknown>) {
+    super.willUpdate(changed);
+    // The first hass brings Home Assistant's time zone
+    if (changed.has("hass") && !changed.get("hass")) this._tick();
+  }
+
+  protected updated(changed: Map<PropertyKey, unknown>) {
+    super.updated(changed);
+    this._loadWeek();
+  }
+
+  /** Reads the active schedule again when it changes or its entity reports a new state. */
+  private _loadWeek() {
+    if (this.editing || !this.hass) return;
+    const index = this.schedules.findIndex(
+      (_, i) => this._getScheduleState(i, this.schedules.length) === "active",
+    );
+    const eid = index >= 0 ? this.schedules[index].entity_id : "";
+    const st = eid ? this.hass.states[eid] : undefined;
+    const key = st && st.state !== "unavailable" ? `${eid}|${st.last_updated}` : "";
+    if (key === this._weekKey) return;
+    this._weekKey = key;
+    if (!key) {
+      this._week = null;
+      return;
+    }
+    readWeek(this.hass, eid).then(
+      (week) => {
+        if (this._weekKey === key) this._week = week;
+      },
+      () => {
+        if (this._weekKey === key) this._week = null;
+      },
+    );
+  }
 
   static styles = [
     RsScheduleBase.sharedStyles,
     inputStyles,
     css`
-      .fallback-hint {
-        font-size: 11px;
-        color: var(--secondary-text-color);
-        margin-top: 4px;
-        font-style: italic;
+      .inline-warning.in-list {
+        margin: 0 16px 8px;
       }
 
-      .temp-inputs {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
-        margin-top: 16px;
+      /* The edit button needs room: on phones it moves to a second line instead of the name. */
+      .schedule-row {
+        flex-wrap: wrap;
       }
 
-      .temp-input-group {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
+      .schedule-row .schedule-name {
+        flex: 1 1 140px;
       }
 
-      ha-textfield {
-        flex: 1;
+      .schedule-row ha-button {
+        flex: none;
+        margin-left: auto;
       }
 
-      .view-temps {
-        display: flex;
-        gap: 16px;
-        font-size: 13px;
-        color: var(--secondary-text-color);
-        margin-top: 12px;
-        padding-top: 12px;
-        border-top: 1px solid var(--divider-color, #eee);
-      }
-
-      .view-temps span {
-        font-weight: 500;
-        color: var(--primary-text-color);
-      }
-
-      .view-selector-info {
-        font-size: 12px;
-        color: var(--secondary-text-color);
-        margin-top: 8px;
-      }
-
-      .temp-grid-auto {
-        display: grid;
-        grid-template-columns: auto 1fr 1fr;
-        gap: 8px 12px;
-        align-items: center;
-        margin-top: 16px;
-      }
-      .temp-grid-header {
-        font-size: 12px;
-        font-weight: 600;
-        color: var(--secondary-text-color);
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-        text-align: center;
-      }
-      .temp-grid-row-label {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--secondary-text-color);
-        white-space: nowrap;
-      }
-
-      @media (max-width: 600px) {
-        .temp-grid-auto {
-          grid-template-columns: 1fr 1fr;
-        }
-        .temp-grid-row-label {
-          grid-column: 1 / -1;
-          margin-top: 8px;
-        }
-        .temp-grid-header {
-          display: none;
-        }
+      .create-row {
+        margin: 0 -16px 8px;
       }
     `,
   ];
@@ -144,112 +193,277 @@ export class RsScheduleSettings extends RsScheduleBase {
   private _renderViewMode() {
     const l = this.hass.language;
     const hasMultiple = this.schedules.length >= 2;
+    const unit = tempUnit(this.hass);
+    const fmt = (c: number) => formatTempLocale(c, this.hass, 0, 1);
+    const band = (heat: number, cool: number) =>
+      this.climateMode === "auto"
+        ? `${fmt(heat)}–${fmt(cool)}\u00a0${unit}`
+        : `${fmt(this.climateMode === "cool_only" ? cool : heat)}\u00a0${unit}`;
+    const open = (part: ScheduleCardPart) => (e: Event) => this._onEditClick(e, part);
 
     return html`
       ${
         this.schedules.length > 0
-          ? html`
-              <div class="schedule-list">
-                ${this.schedules.map((schedule, index) => {
-                  const state = this._getScheduleState(index, this.schedules.length);
-                  return html`
-                    <div class="schedule-row ${state}">
-                      ${
-                        hasMultiple
-                          ? html`<span class="schedule-number">${index + 1}</span>`
-                          : nothing
-                      }
-                      <span class="schedule-status-dot"></span>
-                      <span
-                        class="schedule-name schedule-link"
-                        @click=${() => this._openEntityInfo(schedule.entity_id)}
-                        >${this._getFriendlyName(schedule.entity_id)}</span
-                      >
-                      <span class="schedule-status">${this._getStatusText(index, state)}</span>
-                    </div>
-                    ${this._renderRejectedTempWarning(state)}
-                  `;
-                })}
-              </div>
-            `
-          : html`<div class="no-schedules">${localize("schedule.no_schedules", l)}</div>`
-      }
-      ${
-        this.climateMode === "auto"
-          ? html`
-              <div class="view-temps">
-                ${localize("schedule.view_heat", l, {
-                  comfort: formatTemp(this.comfortHeat, this.hass),
-                  eco: formatTemp(this.ecoHeat, this.hass),
-                  unit: tempUnit(this.hass),
-                })}
-                 · 
-                ${localize("schedule.view_cool", l, {
-                  comfort: formatTemp(this.comfortCool, this.hass),
-                  eco: formatTemp(this.ecoCool, this.hass),
-                  unit: tempUnit(this.hass),
-                })}
-              </div>
-            `
-          : html`
-              <div class="view-temps">
-                ${localize("schedule.view_comfort", l, {
-                  temp: formatTemp(
-                    this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat,
-                    this.hass,
-                  ),
-                  unit: tempUnit(this.hass),
-                })}
-                 · 
-                ${localize("schedule.view_eco", l, {
-                  temp: formatTemp(
-                    this.climateMode === "cool_only" ? this.ecoCool : this.ecoHeat,
-                    this.hass,
-                  ),
-                  unit: tempUnit(this.hass),
-                })}
-              </div>
-            `
+          ? this.schedules.map((schedule, index) => {
+              const state = this._getScheduleState(index, this.schedules.length);
+              const name = this._getFriendlyName(schedule.entity_id);
+              return html`
+                <rs-list-row
+                  clickable
+                  chevron
+                  icon="mdi:calendar-clock"
+                  icon-label=${localize("detail.more_info", l)}
+                  .iconColor=${state === "active" ? "var(--primary-color)" : ""}
+                  .heading=${hasMultiple ? `${index + 1} · ${name}` : name}
+                  .secondary=${[this._getStatusText(index, state), this._usage(schedule.entity_id)]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  @row-click=${open("schedule")}
+                  @icon-click=${() => this._openEntityInfo(schedule.entity_id)}
+                  >${state === "active" ? this._renderToday() : nothing}</rs-list-row
+                >
+                ${this._renderRejectedTempWarning(state, true)}
+              `;
+            })
+          : html`<rs-list-row
+              clickable
+              plain-icon
+              variant="primary"
+              icon="mdi:plus"
+              .heading=${localize("detail.schedule.add", l)}
+              .secondary=${localize("schedule.no_schedules", l)}
+              @row-click=${open("schedule")}
+            ></rs-list-row>`
       }
       ${
         this.scheduleSelectorEntity
-          ? html`<div class="view-selector-info">
-              ${localize("schedule.view_selector_prefix", l)}
-              <span
-                class="schedule-link"
-                @click=${() => this._openEntityInfo(this.scheduleSelectorEntity!)}
-                >${this._getFriendlyName(this.scheduleSelectorEntity)}</span
-              >
-            </div>`
+          ? html`<rs-list-row
+              clickable
+              chevron
+              icon="mdi:swap-horizontal-circle-outline"
+              icon-label=${localize("detail.more_info", l)}
+              .heading=${this._getFriendlyName(this.scheduleSelectorEntity)}
+              .secondary=${localize("schedule.view_selector_prefix", l).replace(/:\s*$/, "")}
+              .value=${this.selectorStateText()}
+              @row-click=${open("schedule")}
+              @icon-click=${() => this._openEntityInfo(this.scheduleSelectorEntity)}
+            ></rs-list-row>`
+          : nothing
+      }
+      <rs-list-row
+        clickable
+        chevron
+        icon="mdi:sofa"
+        .heading=${localize("override.comfort", l)}
+        .secondary=${this._comfortSub()}
+        .value=${band(this.comfortHeat, this.comfortCool)}
+        @row-click=${open("temperatures")}
+      ></rs-list-row>
+      <rs-list-row
+        clickable
+        chevron
+        icon="mdi:leaf"
+        .heading=${localize("override.eco", l)}
+        .secondary=${this._ecoSub()}
+        .value=${band(this.ecoHeat, this.ecoCool)}
+        @row-click=${open("temperatures")}
+      ></rs-list-row>
+      ${
+        this.preheatSides
+          ? html`<rs-list-row
+              switch
+              wrap
+              icon="mdi:clock-fast"
+              .heading=${localize(PREHEAT_KEYS[this.preheatSides].label, l)}
+              .secondary=${localize(PREHEAT_KEYS[this.preheatSides].sub, l)}
+              .checked=${this.preheatEnabled}
+              @toggle-changed=${(e: CustomEvent<boolean>) =>
+                this._fireValue("preheat-changed", e.detail)}
+            >
+              <rs-info-icon
+                slot="end"
+                .text=${localize(PREHEAT_KEYS[this.preheatSides].hint, l)}
+              ></rs-info-icon>
+            </rs-list-row>`
+          : nothing
+      }
+      <rs-list-row
+        switch
+        wrap
+        icon="mdi:gesture-tap"
+        .heading=${localize("schedule.follow_device_setpoint_label", l)}
+        .secondary=${localize(
+          this.schedules.length
+            ? "detail.schedule.follow_sub"
+            : "detail.schedule.follow_sub_no_schedule",
+          l,
+        )}
+        .checked=${this.followDeviceSetpoint}
+        @toggle-changed=${(e: CustomEvent<boolean>) =>
+          this._fireValue("follow-device-setpoint-changed", e.detail)}
+      >
+        <rs-info-icon
+          slot="end"
+          .text=${localize("schedule.follow_device_setpoint_hint", l)}
+        ></rs-info-icon>
+      </rs-list-row>
+      ${
+        this.priceConfigured
+          ? html`<rs-list-row
+              clickable
+              chevron
+              icon="mdi:cash-clock"
+              .heading=${localize("schedule.price_shift_label", l)}
+              .secondary=${localize("detail.schedule.price_sub", l)}
+              .value=${
+                this.priceShift > 0
+                  ? priceShiftLabel(this.priceShift, this.hass)
+                  : localize("schedule.price_shift_off", l)
+              }
+              @row-click=${open("price")}
+            ></rs-list-row>`
           : nothing
       }
     `;
   }
 
-  // ─── Edit mode ─────────────────────────────────────────────────
+  /** Today's blocks of the active schedule as a bar under its row. */
+  private _renderToday() {
+    if (!this._week) return nothing;
+    const l = this.hass.language;
+    const blocks = this._week[this._now.day] ?? [];
+    const times = dayTimes(blocks);
+    return html`<rs-day-timeline
+      slot="secondary"
+      .blocks=${blocks}
+      .nowMinute=${this._now.minute}
+      .color=${this.climateMode === "cool_only" ? "var(--rs-cool)" : "var(--rs-heat)"}
+      .label=${
+        times ? localize("schedule.today_blocks", l, { times }) : localize("schedule.today_none", l)
+      }
+    ></rs-day-timeline>`;
+  }
+
+  /** When comfort applies in this room. */
+  private _comfortSub(): string {
+    const l = this.hass.language;
+    if (this.schedules.length) return localize("detail.schedule.comfort_sub", l);
+    return localize(
+      this.presenceActive
+        ? "detail.schedule.comfort_sub_home"
+        : "detail.schedule.comfort_sub_always",
+      l,
+    );
+  }
+
+  /** When eco applies in this room: schedule off, nobody home, room empty, else only by choice. */
+  private _ecoSub(): string {
+    const l = this.hass.language;
+    const when: string[] = [];
+    if (this.schedules.length && this.scheduleOffAction === "eco") {
+      when.push(localize("detail.schedule.when_schedule_off", l));
+    }
+    if (this.presenceActive && this.presenceAwayAction === "eco") {
+      when.push(localize("detail.schedule.when_away", l));
+    }
+    if (this.occupancyEco) when.push(localize("detail.schedule.when_empty", l));
+    if (!when.length) return localize("detail.schedule.eco_sub_manual", l);
+    const list = new Intl.ListFormat(l, { type: "disjunction" }).format(when);
+    return localize("detail.schedule.eco_sub", l, { when: list });
+  }
+
+  private _onEditClick(e: Event, part: ScheduleCardPart) {
+    e.stopPropagation();
+    this.dispatchEvent(
+      new CustomEvent("edit-click", { detail: { part }, bubbles: true, composed: true }),
+    );
+  }
+
+  private _fireValue(name: string, value: unknown) {
+    this.dispatchEvent(new CustomEvent(name, { detail: { value }, bubbles: true, composed: true }));
+  }
+
+  // ─── Edit mode (schedule dialog) ───────────────────────────────
 
   private _renderEditMode() {
     const l = this.hass.language;
-    const count = this.schedules.length;
-    const usedIds = new Set(this.schedules.map((s) => s.entity_id));
-
     return html`
-      ${this._renderScheduleList()}
-      ${this._renderAddRow(
-        localize("schedule.select_schedule", l),
-        this._getAvailableEntities(usedIds),
-        (eid) => this._addSchedule(eid),
-        localize("schedule.create_helper_hint", l),
-      )}
+      ${this._renderScheduleList()} ${this._renderAddSource()}
       ${this._renderSelectorSection(
-        count,
+        this.schedules.length,
         localize("schedule.selector_label", l),
-        this.scheduleSelectorEntity ? this._getSelectorValueText(l) : "",
+        "",
         localize("schedule.selector_warning", l),
         (value) => this._onSelectorEntityChange(value),
       )}
-      ${this._renderTemperatureInputs(l)}
     `;
+  }
+
+  /**
+   * Ways to give the room a schedule: create one here (admins), or pick an existing Home
+   * Assistant schedule helper.
+   */
+  private _renderAddSource() {
+    const l = this.hass.language;
+    const usedIds = new Set(this.schedules.map((s) => s.entity_id));
+    return html`
+      ${isAdmin(this.hass) ? this._renderCreate() : nothing}
+      ${this._renderAddRow(
+        localize("schedule_editor.add_existing", l),
+        this._getAvailableEntities(usedIds),
+        (eid) => this._addSchedule(eid),
+      )}
+    `;
+  }
+
+  private _renderCreate() {
+    const l = this.hass.language;
+    if (!this._creating) {
+      return html`<rs-list-row
+        class="create-row"
+        clickable
+        plain-icon
+        variant="primary"
+        icon="mdi:plus"
+        .heading=${localize("schedule_editor.create", l)}
+        @row-click=${this._startCreate}
+      ></rs-list-row>`;
+    }
+    return html`<rs-schedule-create
+      .hass=${this.hass}
+      .defaultName=${this.roomName}
+      @create-cancelled=${() => (this._creating = false)}
+      @schedule-created=${(e: CustomEvent<{ entityId: string }>) => {
+        this._creating = false;
+        this._emitSchedules([...this.schedules, { entity_id: e.detail.entityId }]);
+        this._openEditor(e.detail.entityId);
+      }}
+    ></rs-schedule-create>`;
+  }
+
+  private _startCreate() {
+    this._creating = true;
+  }
+
+  /** "Edit" for storage helpers (admins), "View" for YAML helpers and non-admins. */
+  private _renderEditorButton(entityId: string) {
+    const l = this.hass.language;
+    const edit = isAdmin(this.hass) && isEditableSchedule(this.hass, entityId);
+    if (!this.hass.states[entityId]) return nothing;
+    return html`<ha-button appearance="outlined" @click=${() => this._openEditor(entityId)}>
+      <ha-icon slot="start" .icon=${edit ? "mdi:pencil" : "mdi:eye-outline"}></ha-icon>
+      ${localize(edit ? "schedule_editor.edit" : "schedule_editor.view", l)}
+    </ha-button>`;
+  }
+
+  private _openEditor(entityId: string) {
+    this.dispatchEvent(
+      new CustomEvent("open-schedule-editor", {
+        detail: { entityId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   // ─── Schedule list ─────────────────────────────────────────────
@@ -271,12 +485,18 @@ export class RsScheduleSettings extends RsScheduleBase {
               ${count >= 2 ? html`<span class="schedule-number">${index + 1}</span>` : nothing}
               <span class="schedule-status-dot"></span>
               <span class="schedule-name">${this._getFriendlyName(schedule.entity_id)}</span>
-              <span class="schedule-status">${this._getStatusText(index, state)}</span>
+              <span class="schedule-status"
+                >${[this._getStatusText(index, state), this._usage(schedule.entity_id)]
+                  .filter(Boolean)
+                  .join(" · ")}</span
+              >
+              ${this._renderEditorButton(schedule.entity_id)}
               ${this._renderScheduleControls(
                 index,
                 count,
                 (i, dir) => this._moveSchedule(i, dir),
                 (i) => this._removeSchedule(i),
+                this._getFriendlyName(schedule.entity_id),
               )}
             </div>
             ${this._renderRejectedTempWarning(state)}
@@ -293,14 +513,14 @@ export class RsScheduleSettings extends RsScheduleBase {
    * visible at any time of day — not just while that block is running. The scan
    * covers the active schedule only, hence the warning hangs off that row.
    */
-  private _renderRejectedTempWarning(state: "active" | "inactive" | "unreachable") {
+  private _renderRejectedTempWarning(state: "active" | "inactive" | "unreachable", inList = false) {
     if (state !== "active") return nothing;
     const warnings = this.scheduleTempWarnings ?? [];
     if (warnings.length === 0) return nothing;
 
     const range = tempRange(MIN_TARGET_TEMP_C, MAX_TARGET_TEMP_C, this.hass);
     return html`
-      <div class="inline-warning">
+      <div class="inline-warning ${inList ? "in-list" : ""}">
         <ha-icon icon="mdi:alert-outline"></ha-icon>
         ${localize("schedule.block_temp_rejected", this.hass.language, {
           values: warnings.map((w) => this._formatWarning(w)).join(", "),
@@ -326,122 +546,6 @@ export class RsScheduleSettings extends RsScheduleBase {
       when = `${weekday} ${when}`;
     }
     return `${w.value} (${when})`;
-  }
-
-  // ─── Temperature inputs ────────────────────────────────────────
-
-  private _renderTemperatureInputs(l: string) {
-    if (this.climateMode === "auto") {
-      return html`
-        <div class="temp-grid-auto">
-          <div class="temp-grid-header"></div>
-          <div class="temp-grid-header">${localize("schedule.column_comfort", l)}</div>
-          <div class="temp-grid-header">${localize("schedule.column_eco", l)}</div>
-          <div class="temp-grid-row-label">
-            <ha-icon icon="mdi:fire" style="--mdc-icon-size:16px"></ha-icon>
-            ${localize("schedule.row_heat", l)}
-          </div>
-          <ha-textfield
-            type="number"
-            .value=${String(toDisplay(this.comfortHeat, this.hass))}
-            suffix=${tempUnit(this.hass)}
-            step=${tempStep(this.hass)}
-            min=${tempRange(5, 35, this.hass).min}
-            max=${tempRange(5, 35, this.hass).max}
-            @change=${this._onComfortHeatChange}
-          ></ha-textfield>
-          <ha-textfield
-            type="number"
-            .value=${String(toDisplay(this.ecoHeat, this.hass))}
-            suffix=${tempUnit(this.hass)}
-            step=${tempStep(this.hass)}
-            min=${tempRange(5, 35, this.hass).min}
-            max=${tempRange(5, 35, this.hass).max}
-            @change=${this._onEcoHeatChange}
-          ></ha-textfield>
-          <div class="temp-grid-row-label">
-            <ha-icon icon="mdi:snowflake" style="--mdc-icon-size:16px"></ha-icon>
-            ${localize("schedule.row_cool", l)}
-          </div>
-          <ha-textfield
-            type="number"
-            .value=${String(toDisplay(this.comfortCool, this.hass))}
-            suffix=${tempUnit(this.hass)}
-            step=${tempStep(this.hass)}
-            min=${tempRange(5, 35, this.hass).min}
-            max=${tempRange(5, 35, this.hass).max}
-            @change=${this._onComfortCoolChange}
-          ></ha-textfield>
-          <ha-textfield
-            type="number"
-            .value=${String(toDisplay(this.ecoCool, this.hass))}
-            suffix=${tempUnit(this.hass)}
-            step=${tempStep(this.hass)}
-            min=${tempRange(5, 35, this.hass).min}
-            max=${tempRange(5, 35, this.hass).max}
-            @change=${this._onEcoCoolChange}
-          ></ha-textfield>
-        </div>
-      `;
-    }
-
-    return html`
-      <div class="temp-inputs">
-        <div class="temp-input-group">
-          <ha-textfield
-            type="number"
-            label=${localize("schedule.comfort_label", l)}
-            suffix=${tempUnit(this.hass)}
-            step=${tempStep(this.hass)}
-            .value=${String(
-              toDisplay(
-                this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat,
-                this.hass,
-              ),
-            )}
-            min=${tempRange(5, 35, this.hass).min}
-            max=${tempRange(5, 35, this.hass).max}
-            @change=${
-              this.climateMode === "cool_only"
-                ? this._onComfortCoolChange
-                : this._onComfortHeatChange
-            }
-          ></ha-textfield>
-        </div>
-        <div class="temp-input-group">
-          <ha-textfield
-            type="number"
-            label=${localize("schedule.eco_label", l)}
-            suffix=${tempUnit(this.hass)}
-            step=${tempStep(this.hass)}
-            .value=${String(
-              toDisplay(this.climateMode === "cool_only" ? this.ecoCool : this.ecoHeat, this.hass),
-            )}
-            min=${tempRange(5, 35, this.hass).min}
-            max=${tempRange(5, 35, this.hass).max}
-            @change=${
-              this.climateMode === "cool_only" ? this._onEcoCoolChange : this._onEcoHeatChange
-            }
-          ></ha-textfield>
-        </div>
-      </div>
-      <div class="fallback-hint">${localize("schedule.comfort_hint", l)}</div>
-    `;
-  }
-
-  // ─── Selector value text ───────────────────────────────────────
-
-  private _getSelectorValueText(l: string): string {
-    const selectorState = this.hass?.states?.[this.scheduleSelectorEntity];
-    if (!selectorState) return "";
-    if (this.scheduleSelectorEntity.startsWith("input_boolean.")) {
-      return localize("schedule.selector_value_boolean", l, {
-        value: selectorState.state === "on" ? "On" : "Off",
-      });
-    }
-    return localize("schedule.selector_value_number", l, {
-      value: selectorState.state,
-    });
   }
 
   // ─── Status text (temperature-specific) ────────────────────────
@@ -481,36 +585,35 @@ export class RsScheduleSettings extends RsScheduleBase {
     const entityState = this.hass?.states?.[schedule.entity_id];
     if (!entityState) return localize("schedule.state_active", l);
 
-    const isOn = entityState.state === "on";
-    if (isOn) {
+    const unit = tempUnit(this.hass);
+    // Block temperatures are entity attributes (display units); comfort/eco are °C
+    const shown = (v: number) => formatNumber(v, this.hass, 0, 1);
+    const fmt = (c: number) => formatTempLocale(c, this.hass, 0, 1);
+    const band = (heat: string, cool: string) =>
+      this.climateMode === "auto"
+        ? `${heat}–${cool}\u00a0${unit}`
+        : `${this.climateMode === "cool_only" ? cool : heat}\u00a0${unit}`;
+
+    if (entityState.state === "on") {
       const { blockTemp, heatTemp, coolTemp } = this._readBlockTemps(index);
       if (blockTemp != null) {
-        return localize("schedule.from_schedule", l, {
-          temp: String(blockTemp),
-          unit: tempUnit(this.hass),
-        });
+        return localize("schedule.from_schedule", l, { temp: `${shown(blockTemp)}\u00a0${unit}` });
       }
       if (heatTemp != null || coolTemp != null) {
-        // heatTemp/coolTemp are entity attributes (already display units); the
-        // comfort fallbacks are backend Celsius and need converting.
-        return localize("schedule.from_schedule_split", l, {
-          heat: heatTemp != null ? String(heatTemp) : formatTemp(this.comfortHeat, this.hass),
-          cool: coolTemp != null ? String(coolTemp) : formatTemp(this.comfortCool, this.hass),
-          unit: tempUnit(this.hass),
+        return localize("schedule.from_schedule", l, {
+          temp: band(
+            heatTemp != null ? shown(heatTemp) : fmt(this.comfortHeat),
+            coolTemp != null ? shown(coolTemp) : fmt(this.comfortCool),
+          ),
         });
       }
       return localize("schedule.fallback", l, {
-        temp: formatTemp(
-          this.climateMode === "cool_only" ? this.comfortCool : this.comfortHeat,
-          this.hass,
-        ),
-        unit: tempUnit(this.hass),
+        temp: band(fmt(this.comfortHeat), fmt(this.comfortCool)),
       });
     }
-
+    if (this.scheduleOffAction === "off") return localize("schedule.off_detail", l);
     return localize("schedule.eco_detail", l, {
-      temp: formatTemp(this.climateMode === "cool_only" ? this.ecoCool : this.ecoHeat, this.hass),
-      unit: tempUnit(this.hass),
+      temp: band(fmt(this.ecoHeat), fmt(this.ecoCool)),
     });
   }
 
@@ -550,92 +653,6 @@ export class RsScheduleSettings extends RsScheduleBase {
         composed: true,
       }),
     );
-  }
-
-  // ─── Temperature change handlers ──────────────────────────────
-
-  private _onComfortHeatChange(e: Event) {
-    const target = e.target as HTMLElement & { value: string };
-    const val = toCelsius(parseFloat(target.value) || toDisplay(21.0, this.hass), this.hass);
-    this.dispatchEvent(
-      new CustomEvent("comfort-heat-changed", {
-        detail: { value: val },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-    if (this.comfortCool < val) {
-      this.dispatchEvent(
-        new CustomEvent("comfort-cool-changed", {
-          detail: { value: val },
-          bubbles: true,
-          composed: true,
-        }),
-      );
-    }
-  }
-
-  private _onComfortCoolChange(e: Event) {
-    const target = e.target as HTMLElement & { value: string };
-    const val = toCelsius(parseFloat(target.value) || toDisplay(24.0, this.hass), this.hass);
-    this.dispatchEvent(
-      new CustomEvent("comfort-cool-changed", {
-        detail: { value: val },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-    if (this.comfortHeat > val) {
-      this.dispatchEvent(
-        new CustomEvent("comfort-heat-changed", {
-          detail: { value: val },
-          bubbles: true,
-          composed: true,
-        }),
-      );
-    }
-  }
-
-  private _onEcoHeatChange(e: Event) {
-    const target = e.target as HTMLElement & { value: string };
-    const val = toCelsius(parseFloat(target.value) || toDisplay(17.0, this.hass), this.hass);
-    this.dispatchEvent(
-      new CustomEvent("eco-heat-changed", {
-        detail: { value: val },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-    if (this.ecoCool < val) {
-      this.dispatchEvent(
-        new CustomEvent("eco-cool-changed", {
-          detail: { value: val },
-          bubbles: true,
-          composed: true,
-        }),
-      );
-    }
-  }
-
-  private _onEcoCoolChange(e: Event) {
-    const target = e.target as HTMLElement & { value: string };
-    const val = toCelsius(parseFloat(target.value) || toDisplay(27.0, this.hass), this.hass);
-    this.dispatchEvent(
-      new CustomEvent("eco-cool-changed", {
-        detail: { value: val },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-    if (this.ecoHeat > val) {
-      this.dispatchEvent(
-        new CustomEvent("eco-heat-changed", {
-          detail: { value: val },
-          bubbles: true,
-          composed: true,
-        }),
-      );
-    }
   }
 }
 

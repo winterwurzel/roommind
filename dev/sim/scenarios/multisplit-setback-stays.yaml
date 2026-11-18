@@ -1,0 +1,29 @@
+name: multisplit-setback-stays
+extends: multisplit-setback-release
+description: >
+  Same multi-split house with idle action "setback" but without "Turn off after an hour
+  without demand". The units stay in heat at the setback target through the night, as
+  up to v1.7.9; v1.8.0 switched them off for everyone, and units that reset their
+  display and beeper on every off/on beeped all day (#255).
+refs: [255]
+tags: [compressor, ac, idle]
+roommind:
+  rooms:
+    wohnzimmer:
+      devices: [{entity_id: climate.wz_split, type: ac, idle_action: setback}]
+    schlafzimmer:
+      devices: [{entity_id: climate.sz_split, type: ac, idle_action: setback}]
+    buero:
+      devices: [{entity_id: climate.buero_split, type: ac, idle_action: setback}]
+expect:
+  - {invariant: min_run_commanded}
+  - {invariant: min_run_hold_keeps_setpoint}
+  - {invariant: no_heat_and_cool_same_group}
+  - {invariant: no_rejected_commands}
+  - {check: "dev('climate.wz_split').mode == 'heat'", at: "+2d01h", label: wohnzimmer unit stays on in the night}
+  - {check: "dev('climate.sz_split').mode == 'heat'", at: "+2d01h", label: schlafzimmer unit stays on in the night}
+  - {check: "dev('climate.buero_split').mode == 'heat'", at: "+2d01h", label: buero unit stays on in the night}
+  - {check: "dev('climate.wz_split').mode == 'heat'", at: "+2d03h", label: wohnzimmer unit stays on in the night}
+  - {check: "dev('climate.sz_split').mode == 'heat'", at: "+2d03h", label: schlafzimmer unit stays on in the night}
+  - {check: "dev('climate.buero_split').mode == 'heat'", at: "+2d03h", label: buero unit stays on in the night}
+  - {metric: comfort.in_band_pct, room: schlafzimmer, min: 98}

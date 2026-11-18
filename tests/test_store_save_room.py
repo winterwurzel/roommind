@@ -77,6 +77,9 @@ async def test_create_defaults(store):
     assert room["temperature_sensor"] == ""
     assert room["humidity_sensor"] == ""
     assert room["occupancy_sensors"] == []
+    assert room["occupancy_eco_enabled"] is False
+    assert room["occupancy_eco_delay"] == 15
+    assert room["preheat_enabled"] is True
     assert room["devices"] == []
     assert room["thermostats"] == []
     assert room["acs"] == []
@@ -92,7 +95,7 @@ async def test_create_defaults(store):
     assert room["covers_auto_enabled"] is False
     assert room["covers_deploy_threshold"] == 1.5
     assert room["covers_min_position"] == 0
-    assert room["covers_outdoor_min_temp"] is None
+    assert room["covers_outdoor_min_temp"] == 10.0
     assert room["covers_override_minutes"] == 60
     assert room["cover_schedules"] == []
     assert room["cover_schedule_selector_entity"] == ""

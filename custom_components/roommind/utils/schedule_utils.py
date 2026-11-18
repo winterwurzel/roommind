@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -13,14 +14,21 @@ if TYPE_CHECKING:
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    CLIMATE_MODE_COOL_ONLY,
+    CLIMATE_MODE_HEAT_ONLY,
     DEFAULT_COMFORT_COOL,
     DEFAULT_COMFORT_HEAT,
     DEFAULT_ECO_COOL,
     DEFAULT_ECO_HEAT,
     MAX_TARGET_TEMP,
     MIN_TARGET_TEMP,
+    OVERRIDE_BOOST,
+    OVERRIDE_ECO,
+    SCHEDULE_UNREADABLE_HOLD_HOURS,
     TargetTemps,
+    is_override_active,
 )
+from .price_utils import PriceSignal, apply_price_shift
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,6 +125,101 @@ def find_rejected_block_temps(
     return rejected
 
 
+def override_preset_band(room: dict, override_type: str) -> tuple[float, float]:
+    """Return the (heat, cool) band a boost/eco override stands for.
+
+    Both presets are bands in auto rooms, never a single point: collapsing eco
+    to ``eco_heat`` on both sides makes an AC cool toward the heating target (#284).
+    """
+    if override_type == OVERRIDE_ECO:
+        return (
+            room.get("eco_heat", room.get("eco_temp", DEFAULT_ECO_HEAT)),
+            room.get("eco_cool", DEFAULT_ECO_COOL),
+        )
+    return (
+        room.get("comfort_heat", room.get("comfort_temp", DEFAULT_COMFORT_HEAT)),
+        room.get("comfort_cool", DEFAULT_COMFORT_COOL),
+    )
+
+
+def mask_override_band(heat: float | None, cool: float | None, climate_mode: str) -> tuple[float | None, float | None]:
+    """Drop the side a heat_only/cool_only room cannot act on."""
+    if climate_mode == CLIMATE_MODE_HEAT_ONLY:
+        return heat, None
+    if climate_mode == CLIMATE_MODE_COOL_ONLY:
+        return None, cool
+    return heat, cool
+
+
+def band_in_force(room: dict, live: dict) -> tuple[float | None, float | None]:
+    """The (heat, cool) band a room is held at: its active override, else the targets resolved last cycle.
+
+    Mold prevention is taken off again (not part of the user's band). Falls back to
+    the comfort band when no live targets exist yet or the room is forced off.
+    """
+    if is_override_active(room):
+        return room.get("override_heat"), room.get("override_cool")
+    heat = live.get("heat_target")
+    cool = live.get("cool_target")
+    if heat is None and cool is None:
+        return override_preset_band(room, OVERRIDE_BOOST)
+    return without_temporary_shifts(heat, cool, live)
+
+
+def without_temporary_shifts(heat: float | None, cool: float | None, live: dict) -> tuple[float | None, float | None]:
+    """Live targets without mold prevention and the electricity price shift: neither is part of
+    the user's band, a slider or wall display mirroring them would echo them back as an override."""
+    if heat is not None:
+        heat -= live.get("price_shift_heat") or 0
+        if live.get("mold_prevention_active"):
+            heat -= live.get("mold_prevention_delta") or 0
+    if cool is not None:
+        cool -= live.get("price_shift_cool") or 0
+    return heat, cool
+
+
+def set_band_sides(
+    band: tuple[float | None, float | None], heat: float | None, cool: float | None, climate_mode: str
+) -> tuple[float | None, float | None] | None:
+    """*band* with the given sides (°C, None = unchanged) set within the target bounds.
+
+    A side the room's climate mode does not use is ignored; None if no usable side is
+    given. A set side pushes the other along instead of crossing it, so heat never
+    ends above cool.
+    """
+    cur_heat, cur_cool = mask_override_band(*band, climate_mode)
+    heat, cool = mask_override_band(heat, cool, climate_mode)
+    if heat is None and cool is None:
+        return None
+
+    def bounded(value: float) -> float:
+        return round(min(MAX_TARGET_TEMP, max(MIN_TARGET_TEMP, value)), 1)
+
+    if heat is not None:
+        cur_heat = bounded(heat)
+        if cool is None and cur_cool is not None and cur_cool < cur_heat:
+            cur_cool = cur_heat
+    if cool is not None:
+        cur_cool = bounded(cool)
+        if cur_heat is not None and cur_cool < cur_heat:
+            cur_heat = cur_cool
+    return cur_heat, cur_cool
+
+
+def cap_cool_only_heat(heat: float | None, cool: float | None, climate_mode: str) -> tuple[float | None, float | None]:
+    """Keep the unused heat side of a cool_only room from rising above the cool target.
+
+    A cool_only room configured with the legacy ``comfort_temp`` (API, old configs)
+    carried that value on the heat side next to the default ``comfort_cool``, e.g.
+    heat 24.5 / cool 24.0. The optimizer lifts the cool target to the heat side and
+    the cover target takes the higher one, while guard, hysteresis and the panel use
+    the cool target. The cool target is what the panel shows for cool_only rooms.
+    """
+    if climate_mode == CLIMATE_MODE_COOL_ONLY and heat is not None and cool is not None and heat > cool:
+        return cool, cool
+    return heat, cool
+
+
 def resolve_target_at_time(
     ts: float,
     schedule_blocks: dict | None,
@@ -180,10 +283,12 @@ def resolve_targets_at_time(
     presence_away_action: str = "eco",
     schedule_off_action: str = "eco",
     presence_clears_override: bool = False,
+    room_vacant: bool = False,
 ) -> TargetTemps:
     """Resolve dual heat/cool target temps at a specific timestamp.
 
     Returns TargetTemps(heat, cool). None values mean "force off".
+    ``room_vacant`` caps the schedule result at eco (occupancy eco, #180).
     """
     # 1. Override — split heat/cool dead-band (skipped when presence-away suppresses it)
     if (override_heat is not None or override_cool is not None) and (override_until is None or ts < override_until):
@@ -199,6 +304,30 @@ def resolve_targets_at_time(
             return TargetTemps(heat=None, cool=None)
         return TargetTemps(heat=eco_heat, cool=eco_cool)
     # 3. Schedule blocks
+    targets = _schedule_targets_at_time(
+        ts, schedule_blocks, comfort_heat, comfort_cool, eco_heat, eco_cool, block_temp_converter, schedule_off_action
+    )
+    return cap_to_eco(targets, eco_heat, eco_cool) if room_vacant else targets
+
+
+def cap_to_eco(targets: TargetTemps, eco_heat: float, eco_cool: float) -> TargetTemps:
+    """Lower the demand of *targets* to at most eco; never raise it, "off" sides stay off."""
+    return TargetTemps(
+        heat=min(targets.heat, eco_heat) if targets.heat is not None else None,
+        cool=max(targets.cool, eco_cool) if targets.cool is not None else None,
+    )
+
+
+def _schedule_targets_at_time(
+    ts: float,
+    schedule_blocks: dict | None,
+    comfort_heat: float,
+    comfort_cool: float,
+    eco_heat: float,
+    eco_cool: float,
+    block_temp_converter: Callable[[float], float] | None,
+    schedule_off_action: str,
+) -> TargetTemps:
     if schedule_blocks is None:
         return TargetTemps(heat=comfort_heat, cool=comfort_cool)
     data = find_active_block(schedule_blocks, ts)
@@ -285,6 +414,43 @@ def get_active_schedule_entity(
     return None
 
 
+def next_schedule_change(hass: HomeAssistant, room: dict) -> float | None:
+    """Return the timestamp of the active schedule's next block boundary, or None without one."""
+    entity_id = get_active_schedule_entity(hass, room)
+    state = hass.states.get(entity_id) if entity_id else None
+    return _next_event(state)
+
+
+def _next_event(state: Any) -> float | None:
+    raw = state.attributes.get("next_event") if state else None
+    if isinstance(raw, str):
+        raw = dt_util.parse_datetime(raw)
+    if not isinstance(raw, datetime):
+        return None
+    return raw.timestamp()
+
+
+def override_hold_until(hass: HomeAssistant, room: dict, now: float | None = None) -> float | None:
+    """End of an override held until the schedule changes; None holds until changed.
+
+    None without a schedule and under a schedule without blocks (it never changes).
+    A schedule that cannot be read (missing, unavailable, a past `next_event`) ends
+    the hold after `SCHEDULE_UNREADABLE_HOLD_HOURS`, else it would never end.
+    """
+    entity_id = get_active_schedule_entity(hass, room)
+    if not entity_id:
+        return None
+    now = time.time() if now is None else now
+    state = hass.states.get(entity_id)
+    if state is not None and state.state not in ("unavailable", "unknown"):
+        nxt = _next_event(state)
+        if nxt is None and not state.attributes.get("next_event"):
+            return None
+        if nxt is not None and nxt > now:
+            return nxt
+    return now + SCHEDULE_UNREADABLE_HOLD_HOURS * 3600
+
+
 async def read_schedule_blocks(
     hass: HomeAssistant,
     schedule_entity_id: str,
@@ -340,6 +506,48 @@ async def read_schedule_blocks(
     return None
 
 
+def schedule_sets_target(ts: float, room: dict, settings: dict, *, presence_away: bool, room_vacant: bool) -> bool:
+    """Whether the schedule (or comfort/eco without one) sets the target at ``ts``.
+
+    Only then may the electricity price shift it: an override is the user's own choice,
+    vacation and absence lower the target on purpose, and an empty room never gets more
+    than eco (#180).
+    """
+    if presence_away or room_vacant:
+        return False
+    vacation_until = settings.get("vacation_until")
+    if vacation_until is not None and settings.get("vacation_temp") is not None and ts < vacation_until:
+        return False
+    if room.get("override_heat") is None and room.get("override_cool") is None:
+        return True
+    override_until = room.get("override_until")
+    return override_until is not None and ts >= override_until
+
+
+def price_shifted(
+    targets: TargetTemps,
+    ts: float,
+    room: dict,
+    settings: dict,
+    price_signal: PriceSignal | None,
+    *,
+    presence_away: bool,
+    room_vacant: bool,
+) -> tuple[TargetTemps, tuple[float, float]]:
+    """Targets moved with the price where the room opted in, and the (heat, cool) shift applied."""
+    shift = float(room.get("price_shift") or 0.0)
+    if price_signal is None or shift <= 0 or room.get("is_outdoor"):
+        return targets, (0.0, 0.0)
+    if not schedule_sets_target(ts, room, settings, presence_away=presence_away, room_vacant=room_vacant):
+        return targets, (0.0, 0.0)
+    shifted = apply_price_shift(targets, price_signal.direction_at(ts), shift)
+
+    def delta(new: float | None, old: float | None) -> float:
+        return round(new - old, 3) if new is not None and old is not None else 0.0
+
+    return shifted, (delta(shifted.heat, targets.heat), delta(shifted.cool, targets.cool))
+
+
 def make_target_resolver(
     schedule_blocks: dict | None,
     room: dict,
@@ -347,6 +555,8 @@ def make_target_resolver(
     hass: HomeAssistant | None = None,
     presence_away: bool = False,
     mold_prevention_delta: float = 0.0,
+    room_vacant: bool = False,
+    price_signal: PriceSignal | None = None,
 ) -> Callable[[float], TargetTemps]:
     """Create a sync target resolver function (schedule blocks pre-fetched).
 
@@ -365,6 +575,7 @@ def make_target_resolver(
     presence_away_action = settings.get("presence_away_action", "eco")
     schedule_off_action = settings.get("schedule_off_action", "eco")
     presence_clears_override = bool(settings.get("presence_clears_override", False))
+    climate_mode = room.get("climate_mode", "auto")
 
     converter: Callable[[float], float] | None = None
     if hass is not None:
@@ -391,12 +602,19 @@ def make_target_resolver(
             presence_away_action=presence_away_action,
             schedule_off_action=schedule_off_action,
             presence_clears_override=presence_clears_override,
+            room_vacant=room_vacant,
         )
         if targets.heat is None and targets.cool is None:
             return targets
+        targets, _ = price_shifted(
+            targets, ts, room, settings, price_signal, presence_away=presence_away, room_vacant=room_vacant
+        )
         return TargetTemps(
-            heat=targets.heat + mold_prevention_delta if targets.heat is not None else None,
-            cool=targets.cool if targets.cool is not None else None,
+            *cap_cool_only_heat(
+                targets.heat + mold_prevention_delta if targets.heat is not None else None,
+                targets.cool,
+                climate_mode,
+            )
         )
 
     return resolver

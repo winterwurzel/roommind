@@ -1,22 +1,39 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { localize, uiLanguage } from "../../utils/localize";
+import { containsDeep, deepActiveElement, tabbables } from "../../utils/focus";
+import type { RsIconButton } from "./rs-icon-button";
+import { tokens, alertStyles } from "../../styles/tokens";
+import "./rs-icon-button";
 
-const CLOSE_PATH =
-  "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z";
-const INFO_PATH =
-  "M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z";
+/** Open dialogs, newest last: only the top one answers Esc (all listen on window). */
+const openDialogs: RsEditDialog[] = [];
 
+/**
+ * The panel's modal dialog. Takes the focus on open (close button), keeps Tab inside and gives
+ * the focus back to the opener when it closes or is removed. `sheet` turns it into a bottom
+ * sheet on phones (short forms such as one schedule block). Not a native `<dialog>`: a modal one
+ * makes everything outside inert, and HA picker overlays can render outside the dialog.
+ */
 @customElement("rs-edit-dialog")
 export class RsEditDialog extends LitElement {
   @property({ type: Boolean, reflect: true }) public open = false;
   @property({ type: String }) public heading = "";
   @property({ type: String }) public icon = "";
   @property({ type: Boolean }) public hasInfo = false;
+  /** Below 600 px a bottom sheet with its content height instead of a full-screen page. */
+  @property({ type: Boolean, reflect: true }) public sheet = false;
+  /** Narrow box for short content such as a confirmation. */
+  @property({ type: Boolean, reflect: true }) public compact = false;
+  /** Shown at the top of the body (role alert), so a failed save is seen inside the dialog. */
+  @property({ type: String }) public error = "";
 
   @state() private _infoExpanded = false;
 
+  private _opener: HTMLElement | null = null;
+
   private _onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && this.open) {
+    if (e.key === "Escape" && this.open && openDialogs[openDialogs.length - 1] === this) {
       e.stopPropagation();
       this._close();
     }
@@ -30,192 +47,293 @@ export class RsEditDialog extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this._onKeyDown);
+    this._unstack();
+    // Callers remove the dialog on close instead of clearing `open`
+    this._restoreFocus();
   }
 
-  static styles = css`
-    :host {
-      display: contents;
-    }
+  protected willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has("open") && this.open && !this._opener) this._opener = deepActiveElement();
+  }
 
-    .backdrop {
-      position: fixed;
-      inset: 0;
-      z-index: 1000;
-      background: rgba(0, 0, 0, 0.55);
-      backdrop-filter: blur(2px);
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
-      padding: 32px 16px;
-      box-sizing: border-box;
-      overflow-y: auto;
-      animation: fade-in 0.18s ease-out;
+  protected updated(changed: PropertyValues<this>): void {
+    if (!changed.has("open")) return;
+    if (this.open) {
+      if (!openDialogs.includes(this)) openDialogs.push(this);
+      void this._focusClose();
+    } else {
+      this._unstack();
+      this._restoreFocus();
     }
+  }
 
-    @media (max-width: 600px) {
+  private _unstack() {
+    const i = openDialogs.indexOf(this);
+    if (i >= 0) openDialogs.splice(i, 1);
+  }
+
+  private async _focusClose() {
+    const btn = this.renderRoot.querySelector<RsIconButton>(".close-btn");
+    if (!btn) return;
+    await btn.updateComplete;
+    btn.focusQuietly();
+  }
+
+  private _restoreFocus() {
+    const opener = this._opener;
+    this._opener = null;
+    if (opener?.isConnected) opener.focus();
+  }
+
+  /** Focus left the dialog through one of the guards around it: wrap to the other end. */
+  private _wrap(toStart: boolean) {
+    const dialog = this.renderRoot.querySelector(".dialog");
+    if (!dialog) return;
+    const stops = tabbables(dialog);
+    const target = toStart ? stops[0] : stops[stops.length - 1];
+    if (target) target.focus();
+    else void this._focusClose();
+  }
+
+  static styles = [
+    tokens,
+    alertStyles,
+    css`
+      :host {
+        display: contents;
+      }
+
       .backdrop {
-        padding: 0;
-        align-items: stretch;
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(2px);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 32px 16px;
+        box-sizing: border-box;
+        overflow-y: auto;
+        animation: fade-in 0.18s ease-out;
       }
-    }
 
-    .dialog {
-      background: var(--card-background-color, #1c1c1c);
-      color: var(--primary-text-color);
-      border-radius: 14px;
-      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
-      width: 100%;
-      max-width: 760px;
-      display: flex;
-      flex-direction: column;
-      max-height: calc(100vh - 64px);
-      animation: pop-in 0.18s ease-out;
-    }
+      @media (max-width: 600px) {
+        .backdrop {
+          padding: 0;
+          align-items: stretch;
+        }
+      }
 
-    @media (min-width: 1400px) {
       .dialog {
-        max-width: 880px;
+        background: var(--rs-surface);
+        color: var(--primary-text-color);
+        border-radius: 14px;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+        width: 100%;
+        max-width: 760px;
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 64px);
+        animation: pop-in 0.18s ease-out;
       }
-    }
 
-    @media (max-width: 600px) {
-      .dialog {
-        max-width: 100%;
-        max-height: 100vh;
-        border-radius: 0;
+      @media (min-width: 1400px) {
+        .dialog {
+          max-width: 880px;
+        }
       }
-    }
 
-    .dialog-header {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 18px 24px;
-      border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
-    }
+      @media (min-width: 601px) {
+        :host([compact]) .dialog {
+          max-width: 480px;
+        }
+      }
 
-    .dialog-icon {
-      --mdc-icon-size: 20px;
-      opacity: 0.7;
-      flex-shrink: 0;
-      margin-right: 8px;
-    }
+      @media (max-width: 600px) {
+        .dialog {
+          max-width: 100%;
+          max-height: 100vh;
+          border-radius: 0;
+        }
+      }
 
-    .dialog-title {
-      flex: 1;
-      font-size: 16px;
-      font-weight: 500;
-      margin: 0;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+      @media (max-width: 600px) {
+        :host([sheet]) .backdrop {
+          align-items: flex-end;
+        }
+        :host([sheet]) .dialog {
+          max-height: 88vh;
+          border-radius: 14px 14px 0 0;
+          padding-bottom: env(safe-area-inset-bottom);
+          animation: sheet-in 0.2s ease-out;
+        }
+      }
 
-    .info-btn {
-      --mdc-icon-button-size: 36px;
-      --mdc-icon-size: 20px;
-      color: var(--secondary-text-color);
-      transition:
-        color 0.15s,
-        background 0.15s;
-      border-radius: 50%;
-    }
+      @keyframes sheet-in {
+        from {
+          transform: translateY(24px);
+          opacity: 0;
+        }
+        to {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
 
-    .info-btn.active {
-      color: var(--primary-color);
-      background: rgba(3, 169, 244, 0.12);
-    }
+      @media (prefers-reduced-motion: reduce) {
+        .backdrop,
+        .dialog,
+        :host([sheet]) .dialog {
+          animation: none;
+        }
+      }
 
-    .close-btn {
-      --mdc-icon-button-size: 36px;
-      --mdc-icon-size: 20px;
-      color: var(--secondary-text-color);
-      margin: -6px -10px -6px 0;
-    }
+      .dialog-header {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--rs-border);
+      }
 
-    .dialog-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px 24px 24px;
-    }
+      .dialog-icon {
+        --mdc-icon-size: 20px;
+        opacity: 0.7;
+        flex-shrink: 0;
+        margin-right: 8px;
+      }
 
-    .dialog-body ::slotted(*) {
-      display: block;
-    }
+      .dialog-title {
+        flex: 1;
+        font-size: 16px;
+        font-weight: 500;
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
 
-    .info-panel {
-      margin-bottom: 16px;
-      padding: 12px 14px;
-      background: rgba(3, 169, 244, 0.06);
-      border: 1px solid rgba(3, 169, 244, 0.18);
-      border-radius: 10px;
-      font-size: 13px;
-      line-height: 1.6;
-      color: var(--primary-text-color);
-      animation: info-fade 0.18s ease-out;
-    }
+      .info-btn,
+      .close-btn {
+        --rs-icon-button-color: var(--secondary-text-color);
+      }
 
-    .info-panel ::slotted(*) {
-      display: block;
-    }
+      .info-btn.active {
+        --rs-icon-button-color: var(--primary-color);
+        --rs-icon-button-background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+      }
 
-    @keyframes fade-in {
-      from {
+      .close-btn {
+        margin: -8px -12px -8px 0;
+      }
+
+      .guard {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
         opacity: 0;
       }
-      to {
-        opacity: 1;
-      }
-    }
 
-    @keyframes pop-in {
-      from {
-        opacity: 0;
-        transform: scale(0.97);
+      .dialog-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px 24px 24px;
       }
-      to {
-        opacity: 1;
-        transform: scale(1);
-      }
-    }
 
-    @keyframes info-fade {
-      from {
-        opacity: 0;
-        transform: translateY(-4px);
+      .dialog-body ::slotted(*) {
+        display: block;
       }
-      to {
-        opacity: 1;
-        transform: translateY(0);
+
+      .info-panel {
+        margin-bottom: 16px;
+        padding: 12px 14px;
+        background: var(--rs-fill-primary);
+        border: 1px solid color-mix(in srgb, var(--primary-color) 25%, transparent);
+        border-radius: 10px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--primary-text-color);
+        animation: info-fade 0.18s ease-out;
       }
-    }
-  `;
+
+      .info-panel ::slotted(*) {
+        display: block;
+      }
+
+      @keyframes fade-in {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      @keyframes pop-in {
+        from {
+          opacity: 0;
+          transform: scale(0.97);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      @keyframes info-fade {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    `,
+  ];
 
   render() {
     if (!this.open) return nothing;
+    const l = uiLanguage();
     return html`
-      <div class="backdrop" @click=${this._onBackdropClick} role="dialog" aria-modal="true">
-        <div class="dialog" @click=${(e: Event) => e.stopPropagation()}>
+      <div class="backdrop" @click=${this._onBackdropClick}>
+        <span class="guard" tabindex="0" @focus=${() => this._wrap(false)}></span>
+        <div
+          class="dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="title"
+          @click=${(e: Event) => e.stopPropagation()}
+        >
           <div class="dialog-header">
             ${this.icon ? html`<ha-icon class="dialog-icon" icon=${this.icon}></ha-icon>` : nothing}
-            <h3 class="dialog-title">${this.heading}</h3>
+            <h3 class="dialog-title" id="title">${this.heading}</h3>
             ${
               this.hasInfo
-                ? html`<ha-icon-button
+                ? html`<rs-icon-button
                     class="info-btn ${this._infoExpanded ? "active" : ""}"
-                    .path=${INFO_PATH}
+                    size="sm"
+                    icon="mdi:information-outline"
+                    .label=${localize("common.help", l)}
+                    .pressed=${this._infoExpanded}
                     @click=${this._toggleInfo}
-                  ></ha-icon-button>`
+                  ></rs-icon-button>`
                 : nothing
             }
-            <ha-icon-button
+            <rs-icon-button
               class="close-btn"
-              .path=${CLOSE_PATH}
+              size="sm"
+              icon="mdi:close"
+              .label=${localize("common.close", l)}
               @click=${this._close}
-            ></ha-icon-button>
+            ></rs-icon-button>
           </div>
           <div class="dialog-body">
+            ${this.error ? html`<p class="rs-alert" role="alert">${this.error}</p>` : nothing}
             ${
               this.hasInfo && this._infoExpanded
                 ? html`<div class="info-panel"><slot name="info"></slot></div>`
@@ -224,8 +342,14 @@ export class RsEditDialog extends LitElement {
             <slot></slot>
           </div>
         </div>
+        <span class="guard" tabindex="0" @focus=${() => this._wrap(true)}></span>
       </div>
     `;
+  }
+
+  /** Whether `el` sits inside this dialog, across shadow roots and slots. */
+  private _holds(el: Node): boolean {
+    return containsDeep(this, el);
   }
 
   private _onBackdropClick(e: Event) {
@@ -240,6 +364,9 @@ export class RsEditDialog extends LitElement {
 
   private _close() {
     this._infoExpanded = false;
+    // Fields commit on change, which a typed value only gets on blur: Esc must not drop it
+    const active = deepActiveElement();
+    if (active && this._holds(active)) active.blur();
     // Namespaced event: HA reserves the bare "dialog-closed" name for its own
     // dialog manager (read as `e.detail.dialog`). A composed event of that name
     // with a null detail bubbles up to <home-assistant> and crashes HA's

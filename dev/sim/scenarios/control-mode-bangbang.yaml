@@ -1,0 +1,15 @@
+name: control-mode-bangbang
+extends: ir-ac-no-feedback
+description: >
+  Global control_mode "bangbang" (Settings > Control > Simple). The room has a trained
+  model after the first morning, but MPC must stay off: on/off control with hysteresis
+  only, and the panel must not report MPC as active.
+tags: [ac, control-mode]
+roommind:
+  settings:
+    control_mode: bangbang
+expect:
+  - {check: "room.wohnzimmer.mpc_active == false", at: "+1d12h", label: trained model, MPC still off}
+  - {check: "room.wohnzimmer.mpc_active == false", at: "+1d20h", label: MPC still off in the evening}
+  - {metric: device.commands_per_hour, entity_id: climate.wz_ir_ac, max: 4, label: on/off with hysteresis does not short-cycle}
+  - {metric: device.redundant_commands, entity_id: climate.wz_ir_ac, max: 0}

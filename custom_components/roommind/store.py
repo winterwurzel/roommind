@@ -9,13 +9,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    DEFAULT_CO2_THRESHOLD,
     DEFAULT_COMFORT_COOL,
     DEFAULT_COMFORT_HEAT,
+    DEFAULT_COVERS_OUTDOOR_MIN_TEMP,
     DEFAULT_ECO_COOL,
     DEFAULT_ECO_HEAT,
     DEFAULT_HEAT_SOURCE_AC_MIN_OUTDOOR,
     DEFAULT_HEAT_SOURCE_OUTDOOR_THRESHOLD,
     DEFAULT_HEAT_SOURCE_PRIMARY_DELTA,
+    DEFAULT_OCCUPANCY_ECO_DELAY_MINUTES,
     DOMAIN,
 )
 from .utils.device_utils import (
@@ -33,16 +36,30 @@ STORAGE_KEY = DOMAIN
 
 
 def _migrate_room_temps(room: dict) -> dict:
-    """Migrate legacy single comfort/eco temps to split heat/cool fields."""
+    """Migrate legacy single comfort/eco temps to split heat/cool fields.
+
+    In a cool_only room the single value is the cooling target.
+    """
+    cool_only = room.get("climate_mode") == "cool_only"
     if "comfort_heat" not in room:
         room["comfort_heat"] = room.get("comfort_temp", DEFAULT_COMFORT_HEAT)
     if "comfort_cool" not in room:
-        room["comfort_cool"] = DEFAULT_COMFORT_COOL
+        room["comfort_cool"] = room.get("comfort_temp", DEFAULT_COMFORT_COOL) if cool_only else DEFAULT_COMFORT_COOL
     if "eco_heat" not in room:
         room["eco_heat"] = room.get("eco_temp", DEFAULT_ECO_HEAT)
     if "eco_cool" not in room:
-        room["eco_cool"] = DEFAULT_ECO_COOL
+        room["eco_cool"] = room.get("eco_temp", DEFAULT_ECO_COOL) if cool_only else DEFAULT_ECO_COOL
     return room
+
+
+def _single_temps_to_cool_side(target: dict, config: dict, climate_mode: str) -> None:
+    """A legacy/API caller that sends only comfort_temp/eco_temp to a cool_only room means the cooling target."""
+    if climate_mode != "cool_only":
+        return
+    if "comfort_temp" in config and "comfort_cool" not in config:
+        target["comfort_cool"] = config["comfort_temp"]
+    if "eco_temp" in config and "eco_cool" not in config:
+        target["eco_cool"] = config["eco_temp"]
 
 
 def _migrate_override_fields(room: dict) -> dict:
@@ -218,6 +235,7 @@ class RoomMindStore:
             existing["comfort_heat"] = config["comfort_temp"]
         if "eco_temp" in config and "eco_heat" not in config:
             existing["eco_heat"] = config["eco_temp"]
+        _single_temps_to_cool_side(existing, config, existing.get("climate_mode", "auto"))
         # Directional device sync
         self._sync_devices(existing, config)
         return existing
@@ -233,6 +251,11 @@ class RoomMindStore:
             "temperature_sensor": config.get("temperature_sensor", ""),
             "humidity_sensor": config.get("humidity_sensor", ""),
             "occupancy_sensors": config.get("occupancy_sensors", []),
+            "occupancy_eco_enabled": config.get("occupancy_eco_enabled", False),
+            "occupancy_eco_delay": config.get("occupancy_eco_delay", DEFAULT_OCCUPANCY_ECO_DELAY_MINUTES),
+            "preheat_enabled": config.get("preheat_enabled", True),
+            "price_shift": config.get("price_shift", 0.0),
+            "follow_device_setpoint": config.get("follow_device_setpoint", False),
             "climate_mode": config.get("climate_mode", "auto"),
             "schedules": config.get("schedules", []),
             "schedule_selector_entity": config.get("schedule_selector_entity", ""),
@@ -252,7 +275,7 @@ class RoomMindStore:
             "covers_auto_enabled": config.get("covers_auto_enabled", False),
             "covers_deploy_threshold": config.get("covers_deploy_threshold", 1.5),
             "covers_min_position": config.get("covers_min_position", 0),
-            "covers_outdoor_min_temp": config.get("covers_outdoor_min_temp", None),
+            "covers_outdoor_min_temp": config.get("covers_outdoor_min_temp", DEFAULT_COVERS_OUTDOOR_MIN_TEMP),
             "covers_override_minutes": config.get("covers_override_minutes", 60),
             "cover_schedules": config.get("cover_schedules", []),
             "cover_schedule_selector_entity": config.get("cover_schedule_selector_entity", ""),
@@ -262,6 +285,7 @@ class RoomMindStore:
             "covers_night_close_offset_minutes": config.get("covers_night_close_offset_minutes", 0),
             "covers_night_position": config.get("covers_night_position", 0),
             "covers_snap_deploy": config.get("covers_snap_deploy", False),
+            "covers_window_hold": config.get("covers_window_hold", False),
             "cover_min_positions": config.get("cover_min_positions", {}),
             "ignore_presence": config.get("ignore_presence", False),
             "is_outdoor": config.get("is_outdoor", False),
@@ -274,8 +298,15 @@ class RoomMindStore:
             "heat_source_ac_min_outdoor": config.get("heat_source_ac_min_outdoor", DEFAULT_HEAT_SOURCE_AC_MIN_OUTDOOR),
             "heat_source_ac_surplus_only": config.get("heat_source_ac_surplus_only", False),
             "prefer_electric_heat": config.get("prefer_electric_heat", False),
+            "heat_source_price_aware": config.get("heat_source_price_aware", False),
             "climate_control_enabled": config.get("climate_control_enabled", True),
+            "co2_sensor": config.get("co2_sensor", ""),
+            "co2_threshold": config.get("co2_threshold", DEFAULT_CO2_THRESHOLD),
+            "voc_sensor": config.get("voc_sensor", ""),
+            "voc_threshold": config.get("voc_threshold"),
+            "ventilation_entity": config.get("ventilation_entity", ""),
         }
+        _single_temps_to_cool_side(room, config, room["climate_mode"])
         # Directional device sync for new rooms (truthiness check, not just presence)
         if "devices" in config and config["devices"]:
             t, a = devices_to_legacy(room["devices"])

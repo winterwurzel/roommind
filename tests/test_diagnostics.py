@@ -19,13 +19,13 @@ from custom_components.roommind.managers.ac_coil_dry_manager import AcCoilDryMan
 def _make_estimator():
     """Build a mock ThermalEKF estimator."""
     est = MagicMock()
-    est._x = [20.0, 0.5, 100.0, 80.0, 10.0, 0.3]
+    est._x = [20.0, 0.5, 100.0, 80.0, 10.0, 0.3, 12.0]
     est._n_updates = 200
     est._n_idle = 120
     est._n_heating = 60
     est._n_cooling = 20
     est._applicable_modes = {"idle", "heating"}
-    est._P = [[0.01 * (i == j) for j in range(6)] for i in range(6)]
+    est._P = [[0.01 * (i == j) for j in range(7)] for i in range(7)]
     est.prediction_std.return_value = 0.25
     est.confidence = 0.85
     rc = MagicMock()
@@ -94,12 +94,13 @@ def test_build_model_info():
     assert info["alpha"] == 0.5
     assert info["beta_h"] == 100.0
     assert info["beta_c"] == 80.0
+    assert info["beta_f"] == 12.0
     assert info["n_updates"] == 200
     assert info["n_idle"] == 120
     assert info["n_heating"] == 60
     assert info["n_cooling"] == 20
     assert info["applicable_modes"] == ["heating", "idle"]  # sorted
-    assert len(info["P_diagonal"]) == 6
+    assert len(info["P_diagonal"]) == 7
     assert info["confidence"] == 0.85
     assert "model_params" in info
 
@@ -176,6 +177,8 @@ async def test_diagnostics_with_coordinator_and_model(hass, mock_config_entry):
     assert result["outdoor"]["forecast_available"] is False
     assert result["presence"]["enabled"] is True
     assert result["presence"]["person_states"]["person.alice"] == "home"
+    # control_mode was never saved: the export shows the effective default
+    assert result["settings"]["control_mode"] == "mpc"
 
 
 @pytest.mark.asyncio
@@ -320,6 +323,7 @@ def test_build_device_states_with_ha_state(hass):
     assert dev["type"] == "ac"
     assert dev["idle_action"] == "fan_only"
     assert dev["idle_fan_mode"] == "low"
+    assert dev["setback_auto_off"] is False
     assert dev["ha_state"] == "heat"
     assert dev["hvac_modes"] == ["off", "heat", "cool", "fan_only"]
     assert dev["current_temperature"] == 21.5
@@ -759,3 +763,32 @@ async def test_diagnostics_include_coil_dry(hass, mock_config_entry):
     assert dev["coil_dry_mode"] == "fan_only"
     assert dev["coil_dry_fan_mode"] == "high"
     assert result["coil_dry_state"]["climate.living_ac"]["phase"] == "blow"
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_radiator_room_reports_its_learned_afterglow(hass, mock_config_entry):
+    """Radiator rooms show the learned size and decay time, and q_residual uses them."""
+    store = MagicMock()
+    store.get_settings.return_value = {}
+    store.get_rooms.return_value = {
+        "bed": {"heating_system_type": "radiator", "thermostats": ["climate.trv"]},
+        "hall": {"heating_system_type": "underfloor", "thermostats": ["climate.ufh"]},
+    }
+    coordinator = _make_coordinator(rooms={"bed": {"mode": "idle"}, "hall": {"mode": "idle"}})
+    coordinator._model_manager.get_residual_scale.return_value = 4.25
+    coordinator._model_manager.get_residual_tau.return_value = 35.0
+    coordinator._residual_tracker.get_q_residual.return_value = 0.123456
+    hass.states.get = MagicMock(return_value=None)
+    hass.data[DOMAIN] = {"store": store, "coordinator": coordinator}
+
+    result = await async_get_config_entry_diagnostics(hass, mock_config_entry)
+
+    bed = result["rooms"]["bed"]["live"]
+    assert bed["residual_scale"] == 4.25
+    assert bed["residual_decay_minutes"] == 35.0
+    assert bed["q_residual"] == 0.1235
+    calls = {c.args[0]: c.args for c in coordinator._residual_tracker.get_q_residual.call_args_list}
+    assert calls["bed"][3:] == (4.25, 35.0)
+    # Other systems keep the profile and show no learned afterglow
+    assert calls["hall"][3:] == (1.0, None)
+    assert "residual_scale" not in result["rooms"]["hall"]["live"]

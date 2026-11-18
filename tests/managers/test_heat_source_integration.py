@@ -297,8 +297,8 @@ class TestHeatSourceIntegration:
     async def test_ekf_training_uses_adjusted_power_fraction(self, coordinator, real_store, hass):
         """When orchestration is active, EKF should receive adjusted power_fraction.
 
-        The adjusted pf is the mean of per-device power_fractions from the plan,
-        reflecting that not all devices are equally active.
+        The adjusted pf is the mean over the devices that heat. A parked TRV must not
+        halve the AC's power, or the EKF learns twice the AC's heating rate.
         """
         await _setup_store(real_store)
 
@@ -326,8 +326,9 @@ class TestHeatSourceIntegration:
             reason="small gap",
         )
 
-        # Expected mean pf = (0.0 + 0.8) / 2 = 0.4
-        expected_ekf_pf = 0.4
+        # Only the AC heats and reports it: its delivered share (1.0, not the commanded
+        # 0.8), not the mean with the parked TRV
+        expected_ekf_pf = 1.0
 
         # Observed state reflects the plan: AC actually heating, TRV idle.
         # With the #150 ghost-heating guard in place, mode=heating flows

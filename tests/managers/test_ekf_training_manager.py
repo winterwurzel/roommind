@@ -20,7 +20,10 @@ def model_manager():
 
 @pytest.fixture
 def mgr(model_manager):
-    return EkfTrainingManager(model_manager)
+    m = EkfTrainingManager(model_manager)
+    m._synced.update({"r1", "room1"})
+    m._current.update({"r1", "room1"})
+    return m
 
 
 class TestFlush:
@@ -49,6 +52,7 @@ class TestFlush:
             q_solar=0.0,
             q_residual=0.0,
             q_occupancy=0.0,
+            q_rebound=None,
         )
         assert "room1" not in mgr._accumulated_dt
         assert "room1" not in mgr._accumulated_mode
@@ -293,3 +297,187 @@ class TestClearAndRemove:
 
     def test_remove_nonexistent_room_no_error(self, mgr):
         mgr.remove_room("nonexistent")
+
+
+def test_rebound_is_averaged_over_the_batch():
+    """The EKF gets the dt-weighted mean charge of a batch, not the value at flush time."""
+    model_manager = MagicMock()
+    mgr = EkfTrainingManager(model_manager)
+    mgr._synced.add("room1")
+    common = dict(
+        T_outdoor=30.0,
+        ekf_mode="idle",
+        ekf_pf=0.0,
+        window_open=False,
+        raw_open=False,
+        q_residual=0.0,
+        shading_factor=1.0,
+        q_solar=0.0,
+        can_heat=False,
+        can_cool=True,
+        dt_minutes=1.5,
+    )
+    mgr.process("room1", current_temp=24.0, q_rebound=0.6, **common)
+    model_manager.update.assert_not_called()
+    mgr.process("room1", current_temp=24.2, q_rebound=0.2, **common)
+    assert model_manager.update.call_args.kwargs["q_rebound"] == pytest.approx(0.4)
+
+
+def test_rebound_none_drops_the_batch_mean():
+    model_manager = MagicMock()
+    mgr = EkfTrainingManager(model_manager)
+    mgr._synced.add("room1")
+    common = dict(
+        T_outdoor=30.0,
+        ekf_mode="idle",
+        ekf_pf=0.0,
+        window_open=False,
+        raw_open=False,
+        q_residual=0.0,
+        shading_factor=1.0,
+        q_solar=0.0,
+        can_heat=False,
+        can_cool=True,
+        dt_minutes=1.5,
+    )
+    mgr.process("room1", current_temp=24.0, q_rebound=0.6, **common)
+    mgr.process("room1", current_temp=24.2, q_rebound=None, **common)
+    assert model_manager.update.call_args.kwargs["q_rebound"] is None
+
+
+class TestResyncAfterGap:
+    """A stale model temperature (restart, skipped cycles) must not be learned as a jump (#478)."""
+
+    COMMON = dict(
+        T_outdoor=10.0,
+        ekf_mode="idle",
+        ekf_pf=0.0,
+        window_open=False,
+        raw_open=False,
+        q_residual=0.0,
+        shading_factor=1.0,
+        q_solar=0.0,
+        can_heat=True,
+        can_cool=False,
+        dt_minutes=0.5,
+    )
+
+    def test_first_cycle_after_start_syncs_instead_of_learning(self, model_manager):
+        mgr = EkfTrainingManager(model_manager)
+        mgr.process("r1", current_temp=20.2, **self.COMMON)
+        model_manager.sync_temperature.assert_called_once_with("r1", 20.2)
+        model_manager.update.assert_not_called()
+        assert "r1" not in mgr._accumulated_dt
+
+    def test_learning_resumes_after_the_sync(self, model_manager):
+        mgr = EkfTrainingManager(model_manager)
+        for _ in range(int(EKF_UPDATE_MIN_DT / 0.5) + 1):
+            mgr.process("r1", current_temp=20.2, **self.COMMON)
+        model_manager.sync_temperature.assert_called_once()
+        model_manager.update.assert_called_once()
+        assert model_manager.update.call_args.args[4] == pytest.approx(EKF_UPDATE_MIN_DT)
+
+    def test_skipped_cycles_resync(self, mgr, model_manager):
+        """Training paused (sensor gone, learning off): the next cycle syncs again."""
+        mgr.clear("r1")
+        mgr.process("r1", current_temp=18.0, **self.COMMON)
+        model_manager.sync_temperature.assert_called_once_with("r1", 18.0)
+
+    def test_skipped_training_without_resync_keeps_learning(self, mgr, model_manager):
+        """A compressor hold resumes without a resync, as before #478."""
+        mgr.clear("r1", resync=False)
+        mgr.process("r1", current_temp=18.0, **self.COMMON)
+        model_manager.sync_temperature.assert_not_called()
+        assert mgr._accumulated_dt["r1"] == pytest.approx(0.5)
+
+    def test_unobservable_mode_resyncs_afterwards(self, mgr, model_manager):
+        mgr.process("r1", current_temp=20.0, **{**self.COMMON, "ekf_mode": None})
+        mgr.process("r1", current_temp=19.0, **self.COMMON)
+        model_manager.sync_temperature.assert_called_once_with("r1", 19.0)
+
+    def test_window_after_gap_tracks_temperature_without_learning_k_window(self, model_manager):
+        mgr = EkfTrainingManager(model_manager)
+        mgr.process("r1", current_temp=18.0, **{**self.COMMON, "window_open": True})
+        assert model_manager.update_window_open.call_args.kwargs["learn_k_window"] is False
+        mgr.process("r1", current_temp=17.8, **{**self.COMMON, "window_open": True})
+        assert model_manager.update_window_open.call_args.kwargs["learn_k_window"] is True
+
+    def test_window_after_a_pause_without_resync_does_not_learn_k_window(self, mgr, model_manager):
+        mgr.clear("r1", resync=False)
+        mgr.process("r1", current_temp=18.0, **{**self.COMMON, "window_open": True})
+        assert model_manager.update_window_open.call_args.kwargs["learn_k_window"] is False
+
+    def test_window_keeps_the_room_synced(self, mgr, model_manager):
+        mgr.process("r1", current_temp=18.0, **{**self.COMMON, "window_open": True})
+        mgr.process("r1", current_temp=18.5, **self.COMMON)
+        model_manager.sync_temperature.assert_not_called()
+
+    def test_synced_room_keeps_learning(self, mgr, model_manager):
+        mgr.process("r1", current_temp=20.0, **self.COMMON)
+        model_manager.sync_temperature.assert_not_called()
+        assert mgr._accumulated_dt["r1"] == pytest.approx(0.5)
+
+
+def test_sync_temperature_keeps_the_learned_parameters():
+    from custom_components.roommind.control.thermal_model import RoomModelManager, ThermalEKF
+
+    est = ThermalEKF()
+    for _ in range(20):
+        est.update(21.0, 10.0, "idle", 3.0)
+    params = list(est._x[1:])
+    mm = RoomModelManager()
+    mm._estimators["r1"] = est
+    mm.sync_temperature("r1", 18.5)
+    assert est._x[0] == 18.5
+    assert est._x[1:] == params
+    n = est._n_updates
+    est.update(18.5, 10.0, "idle", 3.0)
+    assert est._n_updates == n + 1
+
+
+def test_sync_temperature_initializes_a_new_estimator():
+    from custom_components.roommind.control.thermal_model import RoomModelManager
+
+    mm = RoomModelManager()
+    mm.sync_temperature("new", 19.0)
+    est = mm.get_estimator("new")
+    assert est._x[0] == 19.0
+    assert est._initialized
+
+
+def test_restart_after_an_outage_keeps_the_learned_heat_loss():
+    """Real EKF: a restored model 2 K above the room must not learn that as heat loss (#478)."""
+    from custom_components.roommind.control.thermal_model import RoomModelManager
+
+    common = dict(
+        T_outdoor=5.0,
+        ekf_mode="idle",
+        ekf_pf=0.0,
+        window_open=False,
+        raw_open=False,
+        q_residual=0.0,
+        shading_factor=1.0,
+        q_solar=0.0,
+        can_heat=True,
+        can_cool=False,
+        dt_minutes=0.5,
+    )
+    alpha = 0.015
+    mm = RoomModelManager()
+    mgr = EkfTrainingManager(mm)
+    temp = 21.0
+    for _ in range(6000):
+        temp -= alpha * (temp - 5.0) * 0.5 / 60
+        if temp < 19.0:
+            temp = 21.0
+            mgr.clear("r1")
+        mgr.process("r1", current_temp=round(temp, 3), **common)
+    learned = mm.get_model("r1").U
+
+    restored = RoomModelManager.from_dict(mm.to_dict())
+    restored.get_estimator("r1")._x[0] = temp + 2.0
+    mgr = EkfTrainingManager(restored)
+    for _ in range(60):
+        temp -= alpha * (temp - 5.0) * 0.5 / 60
+        mgr.process("r1", current_temp=round(temp, 3), **common)
+    assert restored.get_model("r1").U == pytest.approx(learned, rel=0.15)
